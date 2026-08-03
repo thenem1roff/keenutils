@@ -1,0 +1,82 @@
+sh -c '
+# 1. Установка пакетов
+opkg update && opkg install cron torrserver
+
+# 2. Поиск службы и первичный запуск
+INIT_SCRIPT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+if [ -n "$INIT_SCRIPT" ] && [ -x "$INIT_SCRIPT" ]; then
+    "$INIT_SCRIPT" start
+    sleep 3
+else
+    echo "Ошибка: Скрипт автозапуска TorrServer не найден!"
+    exit 1
+fi
+
+# 3. Определение UUID и создание папки кэша
+ENTWARE_UUID=$(df /opt | awk '\''NR==2 {print $6}'\'' | cut -d'\''/'\'' -f4)
+mkdir -p "/tmp/mnt/$ENTWARE_UUID/tscashe"
+
+# 4. Настройка settings.json
+SETTINGS_FILE="/opt/etc/torrserver/settings.json"
+if [ -f "$SETTINGS_FILE" ]; then
+    sed -i '\''s/"CacheSize": [0-9]*/"CacheSize": 1073741824/'\'' "$SETTINGS_FILE"
+    sed -i '\''s/"DownloadRateLimit": [0-9]*/"DownloadRateLimit": 6250/'\'' "$SETTINGS_FILE"
+    sed -i '\''s/"UseDisk": false/"UseDisk": true/'\'' "$SETTINGS_FILE"
+    sed -i '\''s/"PreloadCache": [0-9]*/"PreloadCache": 5/'\'' "$SETTINGS_FILE"
+    sed -i "s|\"TorrentsSavePath\": \".*\"|\"TorrentsSavePath\": \"/tmp/mnt/$ENTWARE_UUID/tscashe\"|" "$SETTINGS_FILE"
+fi
+
+# 5. Перезапуск TorrServer для применения настроек
+"$INIT_SCRIPT" restart
+
+# 6. Создание скрипта вочдога с логированием
+mkdir -p /opt/var/log
+cat << '\''EOF'\'' > /opt/bin/torr_watchdog.sh
+#!/bin/sh
+
+LOG_FILE="/opt/var/log/torr_watchdog.log"
+MAX_LOG_LINES=1000
+
+log_message() {
+    echo "$(date '\''+%Y-%m-%d %H:%M:%S'\'') - $1" >> "$LOG_FILE"
+}
+
+INIT_SCRIPT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+
+if [ -z "$INIT_SCRIPT" ]; then
+    log_message "ОШИБКА: Скрипт автозапуска /opt/etc/init.d/S*torrserver* не найден!"
+    exit 1
+fi
+
+if ! pgrep -f "torrserver" > /dev/null; then
+    log_message "ПРЕДУПРЕЖДЕНИЕ: Процесс TorrServer отсутствует в системе. Запуск..."
+    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+    exit 0
+fi
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -m 5 http://127.0.0.1:8090/echo)
+
+if [ "$HTTP_CODE" != "200" ]; then
+    log_message "ОШИБКА: Процесс найден, но API не отвечает (Код: $HTTP_CODE). Сервер завис (зомби). Перезапуск..."
+    killall -9 torrserver 2>/dev/null
+    sleep 1
+    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+fi
+
+if [ -f "$LOG_FILE" ]; then
+    tail -n "$MAX_LOG_LINES" "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+fi
+EOF
+
+chmod +x /opt/bin/torr_watchdog.sh
+
+# 7. Настройка Cron (каждые 30 секунд)
+sed -i '\''/torr_watchdog.sh/d'\'' /opt/etc/crontab
+echo "* * * * * root /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
+echo "* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
+
+# 8. Перезапуск Cron
+/opt/etc/init.d/S10cron restart
+
+echo "--- Установка завершена, автозапуск и вочдог успешно настроены! ---"
+'
