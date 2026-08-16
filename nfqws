@@ -1,0 +1,50 @@
+sh -c '
+# 1. Обновление пакетов и установка зависимостей
+opkg update && opkg install ca-certificates wget-ssl jq
+opkg remove wget-nossl 2>/dev/null
+
+# 2. Добавление репозиториев nfqws
+mkdir -p /opt/etc/opkg
+echo "src/gz nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all" > /opt/etc/opkg/nfqws-keenetic.conf
+echo "src/gz nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all" > /opt/etc/opkg/nfqws-keenetic-web.conf
+
+# 3. Установка пакетов
+opkg update && opkg install nfqws-keenetic nfqws-keenetic-web
+
+# 4. Получение списка файлов через GitHub API и их скачивание
+mkdir -p /opt/etc/nfqws
+API_URL="https://api.github.com/repos/thenem1roff/keenutils/contents/nfqws_files"
+BASE_URL="https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws_files"
+
+FILES=$(curl -s "$API_URL" | jq -r ".[] | select(.type==\"file\") | .name")
+
+if [ -n "$FILES" ]; then
+    for FILE in $FILES; do
+        wget -q -O "/opt/etc/nfqws/$FILE" "$BASE_URL/$FILE"
+    done
+    chmod 644 /opt/etc/nfqws/* 2>/dev/null
+    echo "Файлы успешно обновлены."
+else
+    echo "Ошибка: Не удалось получить список файлов с GitHub!"
+fi
+
+# 5. Перезапуск службы nfqws
+INIT_NFQWS=$(ls /opt/etc/init.d/S*nfqws* 2>/dev/null | head -n 1)
+
+if [ -n "$INIT_NFQWS" ] && [ -x "$INIT_NFQWS" ]; then
+    echo "Перезапускаем nfqws..."
+    "$INIT_NFQWS" restart
+    sleep 2
+
+    # 6. Проверка, запустился ли процесс
+    if pgrep -f "nfqws" > /dev/null; then
+        echo "--- Успех: nfqws успешно перезапущен! ---"
+    else
+        echo "--- ОШИБКА: Процесс nfqws не запущен! ---"
+        exit 1
+    fi
+else
+    echo "Ошибка: Скрипт автозапуска nfqws не найден!"
+    exit 1
+fi
+'
