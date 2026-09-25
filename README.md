@@ -6,6 +6,5 @@ curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/refs/heads/ma
 # nfqws
 быстрая установка nfqws
 ```bash
-opkg update && opkg install curl
 curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws | sh
 ```
