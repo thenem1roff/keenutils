@@ -1,0 +1,77 @@
+sh -c '
+# 1. Проверка наличия всех необходимых утилит и файлов
+echo "Проверка окружения..."
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "Ошибка: Утилита curl не установлена! Установите её через: opkg install curl"
+    exit 1
+fi
+
+CRON_INIT=$(ls /opt/etc/init.d/S*cron* 2>/dev/null | head -n 1)
+if [ ! -f /opt/etc/crontab ] || [ -z "$CRON_INIT" ] || [ ! -x "$CRON_INIT" ]; then
+    echo "Ошибка: Cron не установлен или не настроен! Установите его через: opkg install cron"
+    exit 1
+fi
+
+TORR_INIT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+if [ -z "$TORR_INIT" ] || [ ! -x "$TORR_INIT" ]; then
+    echo "Ошибка: Скрипт автозапуска TorrServer (/opt/etc/init.d/S*torrserver*) не найден или не исполняемый!"
+    exit 1
+fi
+
+echo "Все необходимые компоненты найдены. Настройка вочдога..."
+
+# 2. Создание каталога для логов
+mkdir -p /opt/var/log
+
+# 3. Создание скрипта вочдога
+cat << '\''EOF'\'' > /opt/bin/torr_watchdog.sh
+#!/bin/sh
+
+LOG_FILE="/opt/var/log/torr_watchdog.log"
+MAX_LOG_LINES=1000
+
+log_message() {
+    echo "$(date '\''+%Y-%m-%d %H:%M:%S'\'') - $1" >> "$LOG_FILE"
+}
+
+INIT_SCRIPT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+
+if [ -z "$INIT_SCRIPT" ]; then
+    log_message "ОШИБКА: Скрипт автозапуска /opt/etc/init.d/S*torrserver* не найден!"
+    exit 1
+fi
+
+if ! pgrep -f "torrserver" > /dev/null; then
+    log_message "ПРЕДУПРЕЖДЕНИЕ: Процесс TorrServer отсутствует в системе. Запуск..."
+    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+    exit 0
+fi
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -m 5 http://127.0.0.1:8090/echo)
+
+if [ "$HTTP_CODE" != "200" ]; then
+    log_message "ОШИБКА: Процесс найден, но API не отвечает (Код: $HTTP_CODE). Сервер завис (зомби). Перезапуск..."
+    killall -9 torrserver 2>/dev/null
+    sleep 1
+    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+fi
+
+if [ -f "$LOG_FILE" ]; then
+    tail -n "$MAX_LOG_LINES" "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+fi
+EOF
+
+# 4. Выдача прав на исполнение
+chmod +x /opt/bin/torr_watchdog.sh
+
+# 5. Настройка Cron (запуск каждые 30 секунд)
+sed -i '\''/torr_watchdog.sh/d'\'' /opt/etc/crontab
+echo "* * * * * root /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
+echo "* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
+
+# 6. Перезапуск службы Cron
+"$CRON_INIT" restart
+
+echo "--- Настройка вочдога TorrServer успешно завершена! ---"
+'
