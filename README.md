@@ -1,7 +1,7 @@
 # torrserver
 обновление torrserver
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/refs/heads/main/torrserver | sh
+curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/torrserver | sh
 ```
 # nfqws
 быстрая установка nfqws
