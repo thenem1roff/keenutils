@@ -5,7 +5,7 @@ opkg update && opkg install curl
 curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/refs/heads/main/torrserver | sh
 ```
 # nfqws
-быстрая установка nfqws с файлами из zapret + стратегия alt11
+быстрая установка nfqws
 ```bash
 opkg update && opkg install curl
 curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws | sh
