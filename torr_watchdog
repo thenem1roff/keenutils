@@ -29,7 +29,7 @@ cat << '\''EOF'\'' > /opt/bin/torr_watchdog.sh
 #!/bin/sh
 
 LOG_FILE="/opt/var/log/torr_watchdog.log"
-MAX_LOG_LINES=1000
+MAX_LOG_LINES=10000
 
 log_message() {
     echo "$(date '\''+%Y-%m-%d %H:%M:%S'\'') - $1" >> "$LOG_FILE"
