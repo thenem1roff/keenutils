@@ -3,112 +3,137 @@
 # 1. Проверка архитектуры
 ARCH=`uname -m`
 if [ "$ARCH" != "aarch64" ]; then
-    echo "[ERROR] Неподдерживаемая архитектура: $ARCH. Скрипт предназначен только для aarch64."
+    echo "[ERROR] Неподдерживаемая архитектура: $ARCH. Только aarch64."
     exit 1
 fi
+echo "[OK] Архитектура: $ARCH"
 
-# 2. Поиск целевого файла и локальной версии
-TARGET_FILE=`which torrserver 2>/dev/null`
-if [ -z "$TARGET_FILE" ] && [ -f "/opt/sbin/torrserver" ]; then
-    TARGET_FILE="/opt/sbin/torrserver"
+# 2. Поиск целевого файла
+TARGET_FILE="/opt/sbin/torrserver"
+if [ ! -f "$TARGET_FILE" ]; then
+    TARGET_FILE=`which torrserver 2>/dev/null`
 fi
 
 if [ -z "$TARGET_FILE" ] \vert{}\vert{} [ ! -f "$TARGET_FILE" ]; then
-    echo "[ERROR] Целевой файл /opt/sbin/torrserver не найден!"
+    echo "[ERROR] Исполняемый файл TorrServer не найден!"
     exit 1
 fi
 
 LOCAL_VER=`"$TARGET_FILE" --version 2>/dev/null | head -n 1`
+echo "[OK] Локальная версия: $LOCAL_VER"
 
-# 3. Получение последней версии с GitHub
+# 3. Получение последней версии с GitHub API
 echo "Проверка обновлений на GitHub..."
-REMOTE_URL=`curl -sIL https://github.com/YouROK/TorrServer/releases/latest | grep -i "location:" | tail -n 1`
-REMOTE_VER=`echo "$REMOTE_URL" | awk -F'/' '{print $NF}' | tr -d ' \r\n'`
+REMOTE_VER=`curl -sL https://api.github.com/repos/YouROK/TorrServer/releases/latest | grep "tag_name" | head -n 1 | awk -F'"' '{print $4}'`
 
-echo "------------------------------------------------"
-echo "Текущая версия:  $LOCAL_VER"
-echo "Версия на GitHub: $REMOTE_VER"
-echo "------------------------------------------------"
-
-# 4. Проверка совпадения версий через case (без ошибок синтаксиса в sh)
-NEED_UPDATE=1
-if [ -n "$REMOTE_VER" ]; then
+if [ -z "$REMOTE_VER" ]; then
+    echo "[WARNING] Не удалось получить версию с GitHub API. Продолжаем обновление."
+else
+    echo "[OK] Версия на GitHub: $REMOTE_VER"
+    
+    # Если версии совпадают — выходим
     case "$LOCAL_VER" in
         *"$REMOTE_VER"*)
-            echo "[INFO] У вас уже установлена самая свежая версия. Обновление не требуется."
-            NEED_UPDATE=0
+            echo "------------------------------------------------"
+            echo "[INFO] У вас уже установлена самая свежая версия ($LOCAL_VER)."
+            echo "Обновление не требуется."
+            echo "------------------------------------------------"
+            exit 0
+            ;;
+    esac
+
+    # 4. Интерактивный запрос подтверждения
+    echo "------------------------------------------------"
+    echo "Обнаружена новая версия!"
+    echo "Текущая: $LOCAL_VER"
+    echo "Новая:   $REMOTE_VER"
+    echo "------------------------------------------------"
+    
+    printf "Продолжить обновление? [Y/n]: "
+    read REPLY < /dev/tty
+    echo ""
+
+    case "$REPLY" in
+        [nN]*)
+            echo "[INFO] Обновление отменено."
+            exit 0
+            ;;
+        *)
+            echo "[INFO] Начинаем обновление..."
             ;;
     esac
 fi
 
-if [ "$NEED_UPDATE" -eq 0 ]; then
-    exit 0
+# 5. Поиск скрипта автозапуска
+INIT_SCRIPT="/opt/etc/init.d/S90torrserver"
+if [ ! -f "$INIT_SCRIPT" ]; then
+    INIT_SCRIPT=`ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1`
 fi
 
-# 5. Диалог с подтверждением
-printf "Обнаружена новая версия. Продолжить обновление? [Y/n]: "
-read REPLY < /dev/tty
-echo ""
-
-case "$REPLY" in
-    [nN]*)
-        echo "[INFO] Обновление отменено пользователем."
-        exit 0
-        ;;
-    *)
-        echo "[INFO] Начинаем процесс обновления..."
-        ;;
-esac
-
-# 6. Поиск скрипта автозапуска
-INIT_SCRIPT=`ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1`
 if [ -z "$INIT_SCRIPT" ] \vert{}\vert{} [ ! -f "$INIT_SCRIPT" ]; then
-    echo "[ERROR] Скрипт автозапуска TorrServer не найден в /opt/etc/init.d/"
+    echo "[ERROR] Скрипт автозапуска не найден в /opt/etc/init.d/"
     exit 1
 fi
+echo "[OK] Скрипт автозапуска: $INIT_SCRIPT"
 
-# 7. Остановка службы
+# 6. Остановка службы
 echo "Остановка TorrServer..."
 $INIT_SCRIPT stop >/dev/null 2>&1
 sleep 2
 
 if pidof torrserver >/dev/null || pidof TorrServer >/dev/null; then
-    echo "[ERROR] Не удалось остановить TorrServer!"
+    echo "[ERROR] Не удалось остановить процесс TorrServer!"
     exit 1
 fi
+echo "[OK] Служба остановлена."
 
-# 8. Скачивание нового файла
-echo "Скачивание новой версии (aarch64)..."
-cd /tmp && curl -sL -O https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64
+# 7. Скачивание нового файла
+echo "Скачивание бинарника для aarch64..."
+cd /tmp
+rm -f /tmp/TorrServer-linux-arm64
+curl -sL -O https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64
 
 NEW_FILE="/tmp/TorrServer-linux-arm64"
 if [ ! -f "$NEW_FILE" ] \vert{}\vert{} [ ! -s "$NEW_FILE" ]; then
-    echo "[ERROR] Ошибка скачивания!"
+    echo "[ERROR] Ошибка скачивания! Файл пуст или отсутствует."
     $INIT_SCRIPT start
     exit 1
 fi
+echo "[OK] Файл скачан."
 
-# 9. Замена и проверка SHA256
+# 8. Замена и проверка через SHA256
 NEW_HASH=`sha256sum "$NEW_FILE" | awk '{print $1}'`
+
 mv -f "$NEW_FILE" "$TARGET_FILE"
+
 TARGET_HASH=`sha256sum "$TARGET_FILE" | awk '{print $1}'`
 
 if [ "$NEW_HASH" != "$TARGET_HASH" ]; then
-    echo "[ERROR] Ошибка! Хеши файлов не совпадают."
+    echo "[ERROR] Ошибка целостности! Хеши SHA256 не совпадают."
     exit 1
 fi
+echo "[OK] Файл заменен, SHA256 подтвержден."
 
-# 10. Выдача прав и запуск
+# 9. Права на исполнение
 chmod +x "$TARGET_FILE"
+if [ ! -x "$TARGET_FILE" ]; then
+    echo "[ERROR] Не удалось выдать права +x!"
+    exit 1
+fi
+echo "[OK] Права выданы."
+
+# 10. Запуск службы
+echo "Запуск TorrServer..."
 $INIT_SCRIPT start >/dev/null 2>&1
 sleep 2
 
 if ! pidof torrserver >/dev/null && ! pidof TorrServer >/dev/null; then
-    echo "[ERROR] Служба не запустилась!"
+    echo "[ERROR] Служба не запустилась после обновления!"
     exit 1
 fi
+echo "[OK] TorrServer успешно запущен."
 
 echo "------------------------------------------------"
-echo "Обновление успешно завершено! Новая версия:"
+echo "Обновление завершено! Актуальная версия:"
 $TARGET_FILE --version
 echo "------------------------------------------------"
