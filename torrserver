@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # 1. Проверка архитектуры
-ARCH=$(uname -m)
+ARCH=`uname -m`
 if [ "$ARCH" != "aarch64" ]; then
     echo "[ERROR] Неподдерживаемая архитектура: $ARCH. Скрипт предназначен только для aarch64."
     exit 1
@@ -9,29 +9,29 @@ fi
 echo "[OK] Архитектура: $ARCH"
 
 # 2. Поиск целевого файла и проверка локальной версии
-TARGET_FILE=$(which torrserver 2>/dev/null)
+TARGET_FILE=`which torrserver 2>/dev/null`
 if [ -z "$TARGET_FILE" ] && [ -f "/opt/sbin/torrserver" ]; then
     TARGET_FILE="/opt/sbin/torrserver"
 fi
 
-if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
+if [ -z "$TARGET_FILE" ] \vert{}\vert{} [ ! -f "$TARGET_FILE" ]; then
     echo "[ERROR] Целевой файл /opt/sbin/torrserver не найден!"
     exit 1
 fi
 
-LOCAL_VER=$("$TARGET_FILE" --version 2>/dev/null | head -n 1)
+LOCAL_VER=`"$TARGET_FILE" --version 2>/dev/null | head -n 1`
 
 # 3. Получение версии последнего релиза с GitHub
 echo "Проверка доступных обновлений на GitHub..."
-REMOTE_VER=$(curl -sL https://api.github.com/repos/YouROK/TorrServer/releases/latest | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/')
+REMOTE_VER=`curl -sL https://api.github.com/repos/YouROK/TorrServer/releases/latest | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/'`
 
 if [ -z "$REMOTE_VER" ]; then
     echo "[WARNING] Не удалось получить актуальную версию с GitHub API. Продолжаем стандартную установку."
 else
-    CLEAN_LOCAL=$(echo "$LOCAL_VER" | tr -d ' \r\n')
-    CLEAN_REMOTE=$(echo "$REMOTE_VER" | tr -d ' \r\n')
+    CLEAN_LOCAL=`echo "$LOCAL_VER" | tr -d ' \r\n'`
+    CLEAN_REMOTE=`echo "$REMOTE_VER" | tr -d ' \r\n'`
 
-    if [ "$CLEAN_LOCAL" = "$CLEAN_REMOTE" ] || echo "$LOCAL_VER" | grep -q "$CLEAN_REMOTE"; then
+    if [ "$CLEAN_LOCAL" = "$CLEAN_REMOTE" ] || echo "$LOCAL_VER" \vert{} grep -q "$CLEAN_REMOTE"; then
         echo "------------------------------------------------"
         echo "[INFO] Текущая версия: $LOCAL_VER"
         echo "[INFO] Версия на GitHub: $REMOTE_VER"
@@ -69,10 +69,10 @@ if [ -f "/opt/etc/init.d/S90torrserver" ]; then
 elif [ -f "/opt/etc/init.d/S99torrserver" ]; then
     INIT_SCRIPT="/opt/etc/init.d/S99torrserver"
 else
-    INIT_SCRIPT=$(ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1)
+    INIT_SCRIPT=`ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1`
 fi
 
-if [ -z "$INIT_SCRIPT" ] || [ ! -f "$INIT_SCRIPT" ]; then
+if [ -z "$INIT_SCRIPT" ] \vert{}\vert{} [ ! -f "$INIT_SCRIPT" ]; then
     echo "[ERROR] Скрипт автозапуска TorrServer не найден в /opt/etc/init.d/"
     exit 1
 fi
@@ -94,7 +94,7 @@ echo "Скачивание новой версии TorrServer (aarch64)..."
 cd /tmp && curl -sL -O https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64
 
 NEW_FILE="/tmp/TorrServer-linux-arm64"
-if [ ! -f "$NEW_FILE" ] || [ ! -s "$NEW_FILE" ]; then
+if [ ! -f "$NEW_FILE" ] \vert{}\vert{} [ ! -s "$NEW_FILE" ]; then
     echo "[ERROR] Ошибка скачивания! Файл отсутствует или имеет нулевой размер."
     $INIT_SCRIPT start
     exit 1
@@ -102,11 +102,11 @@ fi
 echo "[OK] Файл успешно скачан."
 
 # 8. Замена файла и проверка через SHA256 хеш
-NEW_HASH=$(sha256sum "$NEW_FILE" | awk '{print $1}')
+NEW_HASH=`sha256sum "$NEW_FILE" | awk '{print $1}'`
 
 mv -f "$NEW_FILE" "$TARGET_FILE"
 
-TARGET_HASH=$(sha256sum "$TARGET_FILE" | awk '{print $1}')
+TARGET_HASH=`sha256sum "$TARGET_FILE" | awk '{print $1}'`
 
 if [ "$NEW_HASH" != "$TARGET_HASH" ]; then
     echo "[ERROR] Критическая ошибка! Хеши файлов не совпадают. Замена прошла некорректно."
@@ -133,7 +133,7 @@ if ! pidof torrserver >/dev/null && ! pidof TorrServer >/dev/null; then
 fi
 echo "[OK] TorrServer успешно запущен и работает."
 
-echo "---------------------------------"
+echo "------------------------------------------------"
 echo "Обновление завершено! Новая версия:"
 $TARGET_FILE --version
-echo "---------------------------------"
+echo "------------------------------------------------"
