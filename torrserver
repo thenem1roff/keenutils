@@ -220,7 +220,7 @@ say "[OK] Downloaded binary: $DOWNLOADED_VER"
 
 DOWNLOADED_NUM="$(version_number "$DOWNLOADED_VER")"
 
-[ "$DOWNLOADED_VER" = "$REMOTE_VER" ] ||
+[ "$DOWNLOADED_NUM" = "$REMOTE_NUM" ] ||
     fail "Downloaded version does not match GitHub release."
 
 # 8. Create and verify a versioned backup.
