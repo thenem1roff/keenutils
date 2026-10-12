@@ -1,340 +1,183 @@
 
 #!/bin/sh
 
-# TorrServer updater for Keenetic / Entware
-# Architecture: aarch64
-# Features: SHA256 verification, versioned backups, rollback.
+# TorrServer updater for Keenetic + Entware (ARM64)
 
-PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export PATH
+BIN="/opt/sbin/torrserver"
+SERVICE="/opt/etc/init.d/S90torrserver"
+BACKUP="/opt/sbin/torrserver.backup"
+API="https://api.github.com/repos/YouROK/TorrServer/releases/latest"
+API_URL="http://127.0.0.1:8090/echo"
 
-API_URL="https://api.github.com/repos/YouROK/TorrServer/releases/latest"
-DOWNLOAD_URL="https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64"
+export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-TARGET_FILE="/opt/sbin/torrserver"
-INIT_SCRIPT="/opt/etc/init.d/S90torrserver"
-BACKUP_DIR="/opt/sbin/torrserver-backups"
-HEALTH_URL="http://127.0.0.1:8090/"
-MAX_BACKUPS=3
-
-WORK="/tmp/torr-update-$$"
-mkdir -p "$WORK" || exit 1
-
-API_FILE="$WORK/release.json"
-NEW_FILE="$WORK/TorrServer-linux-arm64"
-INSTALL_TMP="${TARGET_FILE}.new"
-RESTORE_TMP="${TARGET_FILE}.restore"
+TMP=""
+STOPPED=0
 
 cleanup() {
-    rm -rf "$WORK"
-    rm -f "$INSTALL_TMP" "$RESTORE_TMP"
+    [ -z "$TMP" ] || rm -f "$TMP"
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-say() { echo "$*"; }
-
 fail() {
-    say "[ERROR] $*"
+    echo "ОШИБКА: $*" >&2
     exit 1
 }
 
-# Retry network requests up to 3 times.
-fetch() {
-    URL="$1"
-    OUTPUT="$2"
-    ATTEMPT=1
-
-    while [ "$ATTEMPT" -le 3 ]; do
-        say "[INFO] Download attempt $ATTEMPT/3"
-
-        if curl -4 -fLsS \
-            --connect-timeout 20 \
-            --max-time 600 \
-            "$URL" -o "$OUTPUT"; then
-            [ -s "$OUTPUT" ] && return 0
-        fi
-
-        rm -f "$OUTPUT"
-        ATTEMPT=$((ATTEMPT + 1))
-
-        if [ "$ATTEMPT" -le 3 ]; then
-            sleep 3
-        fi
-    done
-
-    return 1
+version() {
+    "$1" --version 2>&1 |
+        sed -n 's/.*\(MatriX\.[0-9][0-9.]*\).*/\1/p' |
+        head -n 1
 }
 
-# Extract numeric version, e.g. MatriX.146.1 -> 146.1
-version_number() {
-    echo "$1" |
-        sed -n 's/.*MatriX\.\([0-9][0-9.]*\).*/\1/p'
-}
+echo "=== TorrServer Updater ==="
 
-# Return success when version B is newer than version A.
-is_newer() {
-    awk -v a="$1" -v b="$2" '
-    BEGIN {
-        na = split(a, aa, ".")
-        nb = split(b, bb, ".")
-        n = na > nb ? na : nb
+[ "$(uname -m)" = "aarch64" ] ||
+    fail "Поддерживается только ARM64"
 
-        for (i = 1; i <= n; i++) {
-            x = (i <= na ? aa[i] + 0 : 0)
-            y = (i <= nb ? bb[i] + 0 : 0)
+[ -x "$BIN" ] || fail "TorrServer не найден"
+[ -f "$SERVICE" ] || fail "Скрипт службы не найден"
 
-            if (y > x) exit 0
-            if (y < x) exit 1
-        }
-
-        exit 1
-    }'
-}
-
-# 1. Check architecture.
-ARCH="$(uname -m)"
-[ "$ARCH" = "aarch64" ] ||
-    fail "Unsupported architecture: $ARCH"
-
-say "[OK] Architecture: $ARCH"
-
-# 2. Check required commands.
-for CMD in curl awk sed grep head sha256sum pidof; do
-    command -v "$CMD" >/dev/null 2>&1 ||
-        fail "Required command missing: $CMD"
+for cmd in curl sed head cp mv chmod mktemp; do
+    command -v "$cmd" >/dev/null 2>&1 ||
+        fail "Не найдена команда: $cmd"
 done
 
-# 3. Locate current binary.
-if [ ! -f "$TARGET_FILE" ]; then
-    TARGET_FILE="$(command -v torrserver 2>/dev/null)"
-fi
+CURRENT=$(version "$BIN")
+[ -n "$CURRENT" ] ||
+    fail "Не удалось определить установленную версию"
 
-[ -n "$TARGET_FILE" ] && [ -f "$TARGET_FILE" ] ||
-    fail "TorrServer binary not found"
+echo "Установлена: $CURRENT"
+echo "Проверка GitHub..."
 
-case "$TARGET_FILE" in
-    /*) ;;
-    *) fail "Unexpected binary path: $TARGET_FILE" ;;
+RELEASE=$(curl -fsSL --retry 2 \
+    --connect-timeout 10 --max-time 30 "$API") ||
+    fail "GitHub API недоступен"
+
+LATEST=$(printf '%s\n' "$RELEASE" |
+    sed -n 's/^[[:space:]]*"tag_name": *"\([^"]*\)".*/\1/p' |
+    head -n 1)
+
+case "$LATEST" in
+    MatriX.[0-9]*) ;;
+    *) fail "Некорректная версия релиза: $LATEST" ;;
 esac
 
-LOCAL_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
-[ -n "$LOCAL_VER" ] ||
-    fail "Cannot determine installed version"
+echo "Доступна:    $LATEST"
 
-say "[OK] Installed version: $LOCAL_VER"
-
-# 4. Locate service script.
-if [ ! -f "$INIT_SCRIPT" ]; then
-    INIT_SCRIPT="$(ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1)"
-fi
-
-[ -n "$INIT_SCRIPT" ] && [ -f "$INIT_SCRIPT" ] ||
-    fail "TorrServer init script not found"
-
-# 5. Download release metadata.
-say "[INFO] Checking GitHub releases..."
-
-fetch "$API_URL" "$API_FILE" ||
-    fail "Cannot download GitHub release metadata"
-
-REMOTE_VER="$(grep '"tag_name"' "$API_FILE" |
-    head -n 1 | awk -F '"' '{print $4}')"
-
-[ -n "$REMOTE_VER" ] ||
-    fail "Cannot determine latest release version"
-
-LOCAL_NUM="$(version_number "$LOCAL_VER")"
-REMOTE_NUM="$(version_number "$REMOTE_VER")"
-
-[ -n "$LOCAL_NUM" ] && [ -n "$REMOTE_NUM" ] ||
-    fail "Cannot compare versions: $LOCAL_VER / $REMOTE_VER"
-
-say "[OK] GitHub version: $REMOTE_VER"
-
-if [ "$LOCAL_VER" = "$REMOTE_VER" ]; then
-    say "[INFO] Already up to date."
+if [ "$CURRENT" = "$LATEST" ]; then
+    echo "TorrServer уже обновлён."
     exit 0
 fi
 
-if ! is_newer "$LOCAL_NUM" "$REMOTE_NUM"; then
-    say "[INFO] Installed version is equal to or newer than the release."
+# Сравнение числовых компонентов версии
+is_newer() {
+    awk -v old="${CURRENT#MatriX.}" \
+        -v new="${LATEST#MatriX.}" '
+        BEGIN {
+            a = split(old, x, ".")
+            b = split(new, y, ".")
+            n = (a > b ? a : b)
+            for (i = 1; i <= n; i++) {
+                if ((y[i] + 0) > (x[i] + 0)) exit 0
+                if ((y[i] + 0) < (x[i] + 0)) exit 1
+            }
+            exit 1
+        }'
+}
+
+if ! is_newer; then
+    echo "Установленная версия не старее релиза."
     exit 0
 fi
 
-say "----------------------------------------"
-say "Installed: $LOCAL_VER"
-say "Available: $REMOTE_VER"
-say "----------------------------------------"
+echo "Обновление: $CURRENT -> $LATEST"
 
-printf "Continue update? [Y/n]: "
-read REPLY < /dev/tty || REPLY="n"
+TMP=$(mktemp /opt/sbin/.torrserver.XXXXXX) ||
+    fail "Не удалось создать временный файл"
 
-case "$REPLY" in
-    [nN]*)
-        say "[INFO] Update cancelled."
-        exit 0
-        ;;
-esac
+URL="https://github.com/YouROK/TorrServer/releases/download/$LATEST/TorrServer-linux-arm64"
 
-# 6. Extract official SHA256 for the exact asset.
-EXPECTED_HASH="$(
-    sed -n \
-        '/"name": "TorrServer-linux-arm64"/,/"browser_download_url"/p' \
-        "$API_FILE" |
-    grep '"digest":' |
-    head -n 1 |
-    sed 's/.*"digest":[[:space:]]*"sha256:\([0-9a-fA-F]*\)".*/\1/'
-)"
+echo "Скачивание бинарника..."
 
-case "$EXPECTED_HASH" in
-    *[!0-9a-fA-F]*|'')
-        fail "Official SHA256 digest is missing or invalid."
-        ;;
-esac
+curl -fL --retry 3 --connect-timeout 15 \
+    --max-time 300 -o "$TMP" "$URL" ||
+    fail "Не удалось скачать бинарник"
 
-[ "${#EXPECTED_HASH}" -eq 64 ] ||
-    fail "Official SHA256 must contain 64 hexadecimal characters."
+[ -s "$TMP" ] || fail "Скачанный файл пуст"
 
-# 7. Download and verify BEFORE stopping the service.
-say "[INFO] Downloading new binary..."
+chmod 755 "$TMP" || fail "Ошибка chmod"
 
-fetch "$DOWNLOAD_URL" "$NEW_FILE" ||
-    fail "Binary download failed."
+DOWNLOADED=$(version "$TMP")
 
-ACTUAL_HASH="$(sha256sum "$NEW_FILE" | awk '{print $1}')"
+[ "$DOWNLOADED" = "$LATEST" ] ||
+    fail "Версия скачанного файла не совпадает: $DOWNLOADED"
 
-[ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] ||
-    fail "SHA256 mismatch. Existing installation is untouched."
+echo "Бинарник проверен: $DOWNLOADED"
 
-chmod +x "$NEW_FILE" ||
-    fail "Cannot set executable permission."
+# Резервная копия
+echo "Создание резервной копии..."
+cp -p "$BIN" "$BACKUP" ||
+    fail "Не удалось создать резервную копию"
 
-DOWNLOADED_VER="$("$NEW_FILE" --version 2>/dev/null | head -n 1)"
+rollback() {
+    echo "Восстановление предыдущей версии..."
+    "$SERVICE" stop >/dev/null 2>&1
+    cp -p "$BACKUP" "$BIN" ||
+        fail "Не удалось восстановить бинарник!"
+    "$SERVICE" start
+}
 
-[ -n "$DOWNLOADED_VER" ] ||
-    fail "Downloaded binary failed its version check."
+echo "Остановка TorrServer..."
+"$SERVICE" stop ||
+    fail "Не удалось остановить службу"
 
-say "[OK] SHA256 verified."
-say "[OK] Downloaded binary: $DOWNLOADED_VER"
+STOPPED=1
 
-DOWNLOADED_NUM="$(version_number "$DOWNLOADED_VER")"
-
-[ "$DOWNLOADED_NUM" = "$REMOTE_NUM" ] ||
-    fail "Downloaded version does not match GitHub release."
-
-# 8. Create and verify a versioned backup.
-mkdir -p "$BACKUP_DIR" ||
-    fail "Cannot create backup directory."
-
-LOCAL_TAG="$(echo "$LOCAL_VER" |
-    sed -n 's/.*\(MatriX\.[0-9][0-9.]*\).*/\1/p')"
-
-[ -n "$LOCAL_TAG" ] || LOCAL_TAG="unknown"
-
-STAMP="$(date +%Y%m%d-%H%M%S)"
-BACKUP_FILE="$BACKUP_DIR/torrserver.${LOCAL_TAG}.${STAMP}"
-
-cp -p "$TARGET_FILE" "$BACKUP_FILE" ||
-    fail "Cannot create backup."
-
-ORIGINAL_HASH="$(sha256sum "$TARGET_FILE" | awk '{print $1}')"
-BACKUP_HASH="$(sha256sum "$BACKUP_FILE" | awk '{print $1}')"
-
-[ "$ORIGINAL_HASH" = "$BACKUP_HASH" ] ||
-    fail "Backup verification failed."
-
-say "[OK] Backup created: $BACKUP_FILE"
-
-# 9. Stop service.
-say "[INFO] Stopping TorrServer..."
-
-"$INIT_SCRIPT" stop >/dev/null 2>&1
-sleep 2
-
-if pidof torrserver >/dev/null 2>&1 ||
-   pidof TorrServer >/dev/null 2>&1; then
-    "$INIT_SCRIPT" start >/dev/null 2>&1
-    fail "Could not stop TorrServer."
+echo "Замена бинарника..."
+if ! mv -f "$TMP" "$BIN"; then
+    rollback
+    fail "Ошибка замены бинарника"
 fi
+TMP=""
 
-# 10. Install new binary.
-if ! cp "$NEW_FILE" "$INSTALL_TMP" ||
-   ! chmod +x "$INSTALL_TMP" ||
-   ! mv -f "$INSTALL_TMP" "$TARGET_FILE"; then
-    "$INIT_SCRIPT" start >/dev/null 2>&1
-    fail "Could not install new binary."
-fi
+echo "Запуск TorrServer..."
+"$SERVICE" start
 
-# 11. Start service and check HTTP health.
-say "[INFO] Starting updated TorrServer..."
-
-"$INIT_SCRIPT" start >/dev/null 2>&1
+echo "Проверка работоспособности..."
 
 OK=0
-ATTEMPT=1
+i=0
 
-while [ "$ATTEMPT" -le 5 ]; do
-    if { pidof torrserver >/dev/null 2>&1 ||
-         pidof TorrServer >/dev/null 2>&1; } &&
-       curl -fsS --connect-timeout 2 --max-time 5 \
-           "$HEALTH_URL" -o /dev/null; then
+while [ "$i" -lt 10 ]; do
+    sleep 2
+
+    RUNNING=$(version "$BIN")
+    HTTP_CODE=$(curl -s -o /dev/null \
+        -w '%{http_code}' \
+        --connect-timeout 2 --max-time 3 \
+        "$API_URL")
+
+    if [ "$RUNNING" = "$LATEST" ] &&
+       [ "$HTTP_CODE" = "200" ] &&
+       pgrep -x torrserver >/dev/null 2>&1; then
         OK=1
         break
     fi
 
-    sleep 2
-    ATTEMPT=$((ATTEMPT + 1))
+    i=$((i + 1))
 done
 
-# 12. Roll back on failure.
 if [ "$OK" -ne 1 ]; then
-    say "[ERROR] New version failed health check."
-    say "[INFO] Restoring $LOCAL_VER..."
-
-    "$INIT_SCRIPT" stop >/dev/null 2>&1
-    sleep 2
-
-    if cp "$BACKUP_FILE" "$RESTORE_TMP" &&
-       chmod +x "$RESTORE_TMP" &&
-       mv -f "$RESTORE_TMP" "$TARGET_FILE"; then
-
-        "$INIT_SCRIPT" start >/dev/null 2>&1
-        sleep 2
-
-        RESTORED_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
-
-        if { pidof torrserver >/dev/null 2>&1 ||
-             pidof TorrServer >/dev/null 2>&1; } &&
-           curl -fsS --connect-timeout 2 --max-time 5 \
-               "$HEALTH_URL" -o /dev/null; then
-            say "[OK] Rollback successful: $RESTORED_VER"
-        else
-            say "[CRITICAL] Rollback attempted, but service is unhealthy."
-            say "[CRITICAL] Backup preserved: $BACKUP_FILE"
-        fi
-    else
-        say "[CRITICAL] Could not restore backup."
-        say "[CRITICAL] Backup preserved: $BACKUP_FILE"
-    fi
-
-    exit 1
+    echo "Новая версия не прошла проверку!"
+    rollback
+    fail "Обновление отменено"
 fi
 
-# 13. Keep the three newest backups ONLY after successful update.
-ls -1t "$BACKUP_DIR"/torrserver.* 2>/dev/null |
-    awk -v max="$MAX_BACKUPS" 'NR > max { print }' |
-    while IFS= read -r OLD_FILE; do
-        rm -f "$OLD_FILE"
-    done
-
-FINAL_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
-
-say "----------------------------------------"
-say "[SUCCESS] TorrServer updated."
-say "[OK] Version: $FINAL_VER"
-say "[OK] HTTP health check passed."
-say "[OK] Backup: $BACKUP_FILE"
-say "----------------------------------------"
-
-exit 0
+echo ""
+echo "================================"
+echo "TorrServer успешно обновлён!"
+echo "$CURRENT -> $LATEST"
+echo "API: HTTP $HTTP_CODE"
+echo "================================"
