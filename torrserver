@@ -129,6 +129,17 @@ rollback() {
     "$SERVICE" start
 }
 
+
+echo "Ожидание безопасного момента..."
+
+while :; do
+    SEC=$(date +%S)
+    case "$SEC" in
+        03|33) break ;;
+    esac
+    sleep 1
+done
+
 echo "Остановка TorrServer..."
 "$SERVICE" stop ||
     fail "Не удалось остановить службу"
