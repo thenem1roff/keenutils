@@ -1,139 +1,276 @@
+
 #!/bin/sh
 
-# 1. Проверка архитектуры
-ARCH=`uname -m`
-if [ "$ARCH" != "aarch64" ]; then
-    echo "[ERROR] Неподдерживаемая архитектура: $ARCH. Только aarch64."
-    exit 1
-fi
-echo "[OK] Архитектура: $ARCH"
+# TorrServer updater for Keenetic / Entware (aarch64)
+# Keeps 3 recent backups and rolls back after failed update.
 
-# 2. Поиск целевого файла
+PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+REPO_API="https://api.github.com/repos/YouROK/TorrServer/releases/latest"
+DOWNLOAD_URL="https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64"
 TARGET_FILE="/opt/sbin/torrserver"
-if [ ! -f "$TARGET_FILE" ]; then
-    TARGET_FILE=`which torrserver 2>/dev/null`
-fi
-
-if [ -z "$TARGET_FILE" ] \vert{}\vert{} [ ! -f "$TARGET_FILE" ]; then
-    echo "[ERROR] Исполняемый файл TorrServer не найден!"
-    exit 1
-fi
-
-LOCAL_VER=`"$TARGET_FILE" --version 2>/dev/null | head -n 1`
-echo "[OK] Локальная версия: $LOCAL_VER"
-
-# 3. Получение последней версии с GitHub API
-echo "Проверка обновлений на GitHub..."
-REMOTE_VER=`curl -sL https://api.github.com/repos/YouROK/TorrServer/releases/latest | grep "tag_name" | head -n 1 | awk -F'"' '{print $4}'`
-
-if [ -z "$REMOTE_VER" ]; then
-    echo "[WARNING] Не удалось получить версию с GitHub API. Продолжаем обновление."
-else
-    echo "[OK] Версия на GitHub: $REMOTE_VER"
-    
-    # Если версии совпадают — выходим
-    case "$LOCAL_VER" in
-        *"$REMOTE_VER"*)
-            echo "------------------------------------------------"
-            echo "[INFO] У вас уже установлена самая свежая версия ($LOCAL_VER)."
-            echo "Обновление не требуется."
-            echo "------------------------------------------------"
-            exit 0
-            ;;
-    esac
-
-    # 4. Интерактивный запрос подтверждения
-    echo "------------------------------------------------"
-    echo "Обнаружена новая версия!"
-    echo "Текущая: $LOCAL_VER"
-    echo "Новая:   $REMOTE_VER"
-    echo "------------------------------------------------"
-    
-    printf "Продолжить обновление? [Y/n]: "
-    read REPLY < /dev/tty
-    echo ""
-
-    case "$REPLY" in
-        [nN]*)
-            echo "[INFO] Обновление отменено."
-            exit 0
-            ;;
-        *)
-            echo "[INFO] Начинаем обновление..."
-            ;;
-    esac
-fi
-
-# 5. Поиск скрипта автозапуска
+BACKUP_DIR="/opt/sbin/torrserver-backups"
 INIT_SCRIPT="/opt/etc/init.d/S90torrserver"
+HEALTH_URL="http://127.0.0.1:8090/"
+MAX_BACKUPS=3
+
+TMP_FILE="/tmp/TorrServer-linux-arm64.new"
+API_FILE="/tmp/torrserver-release.json"
+INSTALL_TMP="${TARGET_FILE}.new"
+
+say() { echo "$*"; }
+
+cleanup() {
+    rm -f "$TMP_FILE" "$API_FILE" "$INSTALL_TMP"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+    say "[ERROR] $*"
+    exit 1
+}
+
+# 1. Architecture
+ARCH="$(uname -m)"
+[ "$ARCH" = "aarch64" ] || fail "Unsupported architecture: $ARCH"
+
+say "[OK] Architecture: $ARCH"
+
+# 2. Dependencies
+for cmd in curl awk sed grep head sha256sum pidof; do
+    command -v "$cmd" >/dev/null 2>&1 ||
+        fail "Required command not found: $cmd"
+done
+
+# 3. Locate installed binary
+if [ ! -f "$TARGET_FILE" ]; then
+    TARGET_FILE="$(command -v torrserver 2>/dev/null)"
+fi
+
+[ -n "$TARGET_FILE" ] && [ -f "$TARGET_FILE" ] ||
+    fail "TorrServer binary not found"
+
+# Resolve the executable path if command -v returned a path.
+case "$TARGET_FILE" in
+    /*) ;;
+    *) fail "Unexpected binary path: $TARGET_FILE" ;;
+esac
+
+LOCAL_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
+[ -n "$LOCAL_VER" ] || fail "Cannot determine installed version"
+
+say "[OK] Installed version: $LOCAL_VER"
+
+# 4. Find init script
 if [ ! -f "$INIT_SCRIPT" ]; then
-    INIT_SCRIPT=`ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1`
+    INIT_SCRIPT="$(ls /opt/etc/init.d/*torr* 2>/dev/null | head -n 1)"
 fi
 
-if [ -z "$INIT_SCRIPT" ] \vert{}\vert{} [ ! -f "$INIT_SCRIPT" ]; then
-    echo "[ERROR] Скрипт автозапуска не найден в /opt/etc/init.d/"
-    exit 1
-fi
-echo "[OK] Скрипт автозапуска: $INIT_SCRIPT"
+[ -n "$INIT_SCRIPT" ] && [ -f "$INIT_SCRIPT" ] ||
+    fail "TorrServer init script not found"
 
-# 6. Остановка службы
-echo "Остановка TorrServer..."
-$INIT_SCRIPT stop >/dev/null 2>&1
+# 5. Get release metadata
+say "Checking GitHub release..."
+
+curl -fLsS --connect-timeout 10 --max-time 60 \
+    "$REPO_API" -o "$API_FILE" ||
+    fail "Cannot download GitHub release metadata"
+
+REMOTE_VER="$(grep '"tag_name"' "$API_FILE" |
+    head -n 1 | awk -F '"' '{print $4}')"
+
+[ -n "$REMOTE_VER" ] || fail "Cannot read release tag"
+
+# Extract the official digest for the exact Linux ARM64 asset.
+# GitHub release API provides a digest field for assets.
+EXPECTED_HASH="$(awk '
+    /"name": "TorrServer-linux-arm64"/ { found=1 }
+    found && /"digest":/ {
+        gsub(/.*"digest":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        print
+        exit
+    }
+    found && /^[[:space:]]*}[,]?[[:space:]]*$/ { found=0 }
+' "$API_FILE")"
+
+case "$EXPECTED_HASH" in
+    sha256:????????????????????????????????????????????????????????????????)
+        EXPECTED_HASH="${EXPECTED_HASH#sha256:}"
+        ;;
+    *)
+        fail "Official SHA256 digest missing or invalid; refusing update"
+        ;;
+esac
+
+say "[OK] GitHub version: $REMOTE_VER"
+
+case "$LOCAL_VER" in
+    *"$REMOTE_VER"*)
+        say "[INFO] Already up to date"
+        exit 0
+        ;;
+esac
+
+say "Update available: $LOCAL_VER -> $REMOTE_VER"
+printf "Continue? [Y/n]: "
+read REPLY < /dev/tty || REPLY="n"
+
+case "$REPLY" in
+    [nN]*)
+        say "[INFO] Update cancelled"
+        exit 0
+        ;;
+esac
+
+# 6. Download and verify BEFORE stopping the service.
+say "Downloading new binary..."
+
+curl -fLsS --connect-timeout 15 --max-time 600 \
+    "$DOWNLOAD_URL" -o "$TMP_FILE" ||
+    fail "Download failed"
+
+[ -s "$TMP_FILE" ] || fail "Downloaded file is empty"
+
+ACTUAL_HASH="$(sha256sum "$TMP_FILE" | awk '{print $1}')"
+
+[ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] ||
+    fail "SHA256 mismatch; installed binary was not changed"
+
+chmod +x "$TMP_FILE" || fail "Cannot set executable permission"
+
+# Check that the downloaded binary can report its version.
+DOWNLOADED_VER="$("$TMP_FILE" --version 2>/dev/null | head -n 1)"
+[ -n "$DOWNLOADED_VER" ] ||
+    fail "Downloaded binary failed its version check"
+
+say "[OK] SHA256 verified"
+say "[OK] Downloaded version: $DOWNLOADED_VER"
+
+# 7. Prepare a versioned backup.
+mkdir -p "$BACKUP_DIR" || fail "Cannot create backup directory"
+
+LOCAL_TAG="$(echo "$LOCAL_VER" |
+    sed -n 's/.*\(MatriX\.[0-9][0-9.]*\).*/\1/p' | head -n 1)"
+
+[ -n "$LOCAL_TAG" ] || LOCAL_TAG="unknown"
+
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_FILE="$BACKUP_DIR/torrserver.${LOCAL_TAG}.${STAMP}"
+
+cp -p "$TARGET_FILE" "$BACKUP_FILE" ||
+    fail "Cannot create backup"
+
+# Verify backup against the original binary.
+ORIGINAL_HASH="$(sha256sum "$TARGET_FILE" | awk '{print $1}')"
+BACKUP_HASH="$(sha256sum "$BACKUP_FILE" | awk '{print $1}')"
+
+[ "$ORIGINAL_HASH" = "$BACKUP_HASH" ] ||
+    fail "Backup verification failed"
+
+say "[OK] Backup created: $BACKUP_FILE"
+
+# 8. Stop service.
+say "Stopping TorrServer..."
+"$INIT_SCRIPT" stop >/dev/null 2>&1
 sleep 2
 
-if pidof torrserver >/dev/null || pidof TorrServer >/dev/null; then
-    echo "[ERROR] Не удалось остановить процесс TorrServer!"
-    exit 1
+if pidof torrserver >/dev/null 2>&1 ||
+   pidof TorrServer >/dev/null 2>&1; then
+    say "[ERROR] TorrServer did not stop"
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+    fail "Update aborted"
 fi
-echo "[OK] Служба остановлена."
 
-# 7. Скачивание нового файла
-echo "Скачивание бинарника для aarch64..."
-cd /tmp
-rm -f /tmp/TorrServer-linux-arm64
-curl -sL -O https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm64
+# 9. Install new binary using a temporary file in the same directory.
+cp "$TMP_FILE" "$INSTALL_TMP" || {
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+    fail "Cannot prepare replacement binary"
+}
 
-NEW_FILE="/tmp/TorrServer-linux-arm64"
-if [ ! -f "$NEW_FILE" ] \vert{}\vert{} [ ! -s "$NEW_FILE" ]; then
-    echo "[ERROR] Ошибка скачивания! Файл пуст или отсутствует."
-    $INIT_SCRIPT start
-    exit 1
-fi
-echo "[OK] Файл скачан."
+chmod +x "$INSTALL_TMP" || {
+    rm -f "$INSTALL_TMP"
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+    fail "Cannot set replacement permissions"
+}
 
-# 8. Замена и проверка через SHA256
-NEW_HASH=`sha256sum "$NEW_FILE" | awk '{print $1}'`
+mv -f "$INSTALL_TMP" "$TARGET_FILE" || {
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+    fail "Cannot replace installed binary"
+}
 
-mv -f "$NEW_FILE" "$TARGET_FILE"
-
-TARGET_HASH=`sha256sum "$TARGET_FILE" | awk '{print $1}'`
-
-if [ "$NEW_HASH" != "$TARGET_HASH" ]; then
-    echo "[ERROR] Ошибка целостности! Хеши SHA256 не совпадают."
-    exit 1
-fi
-echo "[OK] Файл заменен, SHA256 подтвержден."
-
-# 9. Права на исполнение
-chmod +x "$TARGET_FILE"
-if [ ! -x "$TARGET_FILE" ]; then
-    echo "[ERROR] Не удалось выдать права +x!"
-    exit 1
-fi
-echo "[OK] Права выданы."
-
-# 10. Запуск службы
-echo "Запуск TorrServer..."
-$INIT_SCRIPT start >/dev/null 2>&1
+# 10. Start and test the service.
+say "Starting updated TorrServer..."
+"$INIT_SCRIPT" start >/dev/null 2>&1
 sleep 2
 
-if ! pidof torrserver >/dev/null && ! pidof TorrServer >/dev/null; then
-    echo "[ERROR] Служба не запустилась после обновления!"
+OK=0
+i=0
+
+while [ "$i" -lt 5 ]; do
+    if { pidof torrserver >/dev/null 2>&1 ||
+         pidof TorrServer >/dev/null 2>&1; } &&
+       curl -fsS --connect-timeout 2 --max-time 5 \
+           "$HEALTH_URL" -o /dev/null; then
+        OK=1
+        break
+    fi
+
+    i=$((i + 1))
+    sleep 2
+done
+
+# 11. Roll back on failure.
+if [ "$OK" -ne 1 ]; then
+    say "[ERROR] New version failed health check"
+    say "[INFO] Rolling back to $LOCAL_VER"
+
+    "$INIT_SCRIPT" stop >/dev/null 2>&1
+    sleep 2
+
+    RESTORE_TMP="${TARGET_FILE}.restore"
+    if cp "$BACKUP_FILE" "$RESTORE_TMP" &&
+       chmod +x "$RESTORE_TMP" &&
+       mv -f "$RESTORE_TMP" "$TARGET_FILE"; then
+
+        "$INIT_SCRIPT" start >/dev/null 2>&1
+        sleep 2
+
+        RESTORED_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
+
+        if { pidof torrserver >/dev/null 2>&1 ||
+             pidof TorrServer >/dev/null 2>&1; } &&
+           curl -fsS --connect-timeout 2 --max-time 5 \
+               "$HEALTH_URL" -o /dev/null; then
+            say "[OK] Rollback successful: $RESTORED_VER"
+        else
+            say "[CRITICAL] Rollback performed, but service health check failed"
+            say "[CRITICAL] Backup preserved at: $BACKUP_FILE"
+        fi
+    else
+        rm -f "$RESTORE_TMP"
+        say "[CRITICAL] Could not restore backup!"
+        say "[CRITICAL] Backup preserved at: $BACKUP_FILE"
+    fi
+
     exit 1
 fi
-echo "[OK] TorrServer успешно запущен."
 
-echo "------------------------------------------------"
-echo "Обновление завершено! Актуальная версия:"
-$TARGET_FILE --version
-echo "------------------------------------------------"
+# 12. Keep the 3 most recent backups.
+ls -1t "$BACKUP_DIR"/torrserver.* 2>/dev/null |
+    awk -v max="$MAX_BACKUPS" 'NR > max { print }' |
+    while IFS= read -r old; do
+        rm -f "$old"
+    done
+
+FINAL_VER="$("$TARGET_FILE" --version 2>/dev/null | head -n 1)"
+
+say "----------------------------------------"
+say "[SUCCESS] TorrServer updated"
+say "[OK] Version: $FINAL_VER"
+say "[OK] HTTP health check passed"
+say "[OK] Backup: $BACKUP_FILE"
+say "----------------------------------------"
+
+exit 0
