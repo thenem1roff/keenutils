@@ -13,7 +13,7 @@ CRONTAB=/opt/etc/crontab
 
 printf 'Проверка окружения...\n'
 
-for program in curl pgrep killall awk wc tail sync mktemp cp mv chmod mkdir rm rmdir; do
+for program in curl pgrep killall awk wc tail sync mktemp cp mv chmod mkdir rm rmdir grep; do
     command -v "$program" >/dev/null 2>&1 || fail "Не найдена утилита $program"
 done
 
@@ -38,7 +38,7 @@ for init in /opt/etc/init.d/S*torrserver*; do
 done
 [ -n "$TORR_INIT" ] || fail 'Не найден исполняемый init-скрипт TorrServer'
 
-mkdir -p /opt/var/log /opt/var/backups || fail 'Не удалось создать служебные каталоги'
+mkdir -p /opt/var/log || fail 'Не удалось создать каталог журналов'
 
 TMP_WATCHDOG=''
 TMP_CRON=''
@@ -121,7 +121,8 @@ start_server() {
 
     log_message "Попытка запуска TorrServer"
 
-    if ! "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1; then
+    # Подавляем цветной вывод init-скрипта (ANSI ESC), оставляем только наши сообщения.
+    if ! "$INIT_SCRIPT" start >/dev/null 2>&1; then
         log_message "ОШИБКА: Команда запуска завершилась неудачно"
         return 1
     fi
@@ -186,34 +187,30 @@ WATCHDOG_SCRIPT
 sh -n "$TMP_WATCHDOG" || fail 'Синтаксическая ошибка в watchdog'
 chmod 755 "$TMP_WATCHDOG" || fail 'Не удалось установить права watchdog'
 
-# Сохраняем прочие задачи Cron. Удаляем только старые задания
-# watchdog и устаревшую ежедневную очистку его журнала.
+# Чистая установка: добавляем только необходимые задачи, не удаляя
+# чужие или старые задания и не создавая резервных копий.
+# Повторный запуск не дублирует уже установленные строки.
 cp -p "$CRONTAB" "$TMP_CRON" || fail 'Не удалось подготовить crontab'
-awk '
-    index($0, "/opt/bin/torr_watchdog.sh") { next }
-    index($0, "torr_watchdog.log") && index($0, "OK: TorrServer") && index($0, "sed -i") { next }
-    { print }
-' "$CRONTAB" > "$TMP_CRON" || fail 'Не удалось обработать crontab'
+CRON_CHANGED=0
 
-printf '%s\n' \
+for ENTRY in \
     '* * * * * root /opt/bin/torr_watchdog.sh' \
-    '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' \
-    >> "$TMP_CRON" || fail 'Не удалось добавить задания Cron'
-
-# Резервируем обе изменяемые настройки перед установкой.
-BACKUP_DIR=$(mktemp -d /opt/var/backups/torr_watchdog_XXXXXXXX) || fail 'Не удалось создать каталог резервной копии'
-cp -p "$CRONTAB" "$BACKUP_DIR/crontab" || fail 'Не удалось сохранить резервную копию crontab'
-if [ -f "$WATCHDOG" ]; then
-    cp -p "$WATCHDOG" "$BACKUP_DIR/torr_watchdog.sh" || fail 'Не удалось сохранить резервную копию watchdog'
-fi
+    '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh'
+do
+    if ! grep -Fqx "$ENTRY" "$TMP_CRON"; then
+        printf '%s\n' "$ENTRY" >> "$TMP_CRON" || fail 'Не удалось записать задание Cron'
+        CRON_CHANGED=1
+    fi
+done
 
 mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
 TMP_WATCHDOG=''
-mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
-TMP_CRON=''
 
-"$CRON_INIT" restart || fail "Не удалось перезапустить Cron. Копии: $BACKUP_DIR"
+if [ "$CRON_CHANGED" -eq 1 ]; then
+    mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
+    TMP_CRON=''
+    "$CRON_INIT" restart || fail 'Не удалось перезапустить Cron'
+fi
 
 printf 'Watchdog установлен. Проверки каждые 30 секунд.\n'
-printf 'Ежедневная очистка лога отключена; журнал пишется только при событиях.\n'
-printf 'Резервные копии: %s\n' "$BACKUP_DIR"
+printf 'Журнал заполняется только при сбоях и восстановлении.\n'
