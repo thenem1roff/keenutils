@@ -25,17 +25,13 @@ trap 'exit 143' 15
 curl -fsSL --retry 2 "$STRATEGY_URL" -o "$TMP/strategy" || fail 'Не удалось скачать strategy'
 [ -s "$TMP/strategy" ] || fail 'Файл strategy пустой'
 
-# Убираем только переносы строк: стратегии объединяются пробелами.
-# Запрещаем символы, способные выполнить shell-подстановку в nfqws.conf.
+# Сохраняем все внутренние переводы строк в точности как в strategy.
+# Только завершающий перевод строки файла не включается в значение параметра.
+# Не допускаем опасных для shell-конфига подстановок или кавычек.
 awk '
     index($0,"\"") || index($0,"\\") || index($0,"$") || index($0,"`") { exit 1 }
-' "$TMP/strategy" || fail 'В strategy обнаружены недопустимые символы: кавычки, обратный слеш, $, `'
-awk '
-    { sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
-    length($0) { printf "%s%s", (found ? " " : ""), $0; found=1 }
-    END { print "" }
-' "$TMP/strategy" > "$TMP/strategy.line"
-STRATEGY=$(cat "$TMP/strategy.line")
+' "$TMP/strategy" || fail 'Недопустимые символы в strategy: кавычки, обратный слеш, $, `'
+STRATEGY=$(cat "$TMP/strategy")
 [ -n "$STRATEGY" ] || fail 'В strategy нет аргументов'
 
 # Меняем только значение NFQWS_ARGS_CUSTOM; остальные строки не редактируем.
@@ -92,14 +88,31 @@ awk -v new="$STRATEGY" -v oldfile="$TMP/current" '
 ' "$CONFIG" > "$TMP/config.edited" || fail 'Конфигурация не изменена'
 
 CURRENT=$(cat "$TMP/current")
-if [ -n "$CURRENT" ]; then
+UPDATE_STRATEGY=0
+
+if [ "$CURRENT" = "$STRATEGY" ]; then
+    printf 'Стратегия уже совпадает с GitHub. Обновляем только файлы.\n'
+elif [ -z "$CURRENT" ]; then
+    UPDATE_STRATEGY=1
+    printf 'NFQWS_ARGS_CUSTOM пуст. Запишем стратегию и обновим файлы.\n'
+else
     printf '\nТекущая стратегия:\n%s\n\nНовая стратегия:\n%s\n\n' "$CURRENT" "$STRATEGY"
     printf 'Заменить NFQWS_ARGS_CUSTOM? [y/N]: '
     [ -r /dev/tty ] || fail 'Нет терминала для подтверждения'
     IFS= read -r reply </dev/tty || fail 'Не удалось прочитать ответ'
     case "$reply" in
-        y|Y|yes|YES|д|Д|да|ДА) ;;
-        *) printf 'Отменено. Файлы и конфигурация не изменены.\n'; exit 0 ;;
+        y|Y|yes|YES|д|Д|да|ДА)
+            UPDATE_STRATEGY=1
+            ;;
+        *)
+            printf '\nСтратегию оставляем без изменений.\n'
+            printf 'Обновить только файлы nfqws_files? [y/N]: '
+            IFS= read -r file_reply </dev/tty || fail 'Не удалось прочитать ответ'
+            case "$file_reply" in
+                y|Y|yes|YES|д|Д|да|ДА) ;;
+                *) printf 'Отменено. Файлы и конфигурация не изменены.\n'; exit 0 ;;
+            esac
+            ;;
     esac
 fi
 
@@ -126,8 +139,8 @@ while IFS= read -r name; do
 done < "$TMP/files.txt"
 printf '\nОбновлено файлов: %s\n' "$COUNT"
 
-if [ "$CURRENT" = "$STRATEGY" ]; then
-    printf 'NFQWS_ARGS_CUSTOM не изменился. Перезапуск nfqws не нужен.\n'
+if [ "$UPDATE_STRATEGY" -eq 0 ]; then
+    printf 'NFQWS_ARGS_CUSTOM не изменён. Перезапуск nfqws не требуется.\n'
     exit 0
 fi
 
@@ -138,14 +151,14 @@ mv -f "$TMP/config.ready" "$CONFIG" || fail 'Не удалось заменит�
 printf 'NFQWS_ARGS_CUSTOM успешно обновлён.\n'
 
 # Перезапуск только после успешного изменения стратегии.
-if command -v service >/dev/null 2>&1; then
-    service nfqws-keenetic restart || fail 'Не удалось перезапустить nfqws-keenetic'
-else
-    START_SCRIPT=''
-    for script in /opt/etc/init.d/S*nfqws*; do
-        if [ -x "$script" ]; then START_SCRIPT=$script; break; fi
-    done
-    [ -n "$START_SCRIPT" ] || fail 'Не найден скрипт перезапуска nfqws'
-    "$START_SCRIPT" restart || fail 'Не удалось перезапустить nfqws'
-fi
+# Используем init-скрипт Entware, как в прежнем рабочем установщике.
+INIT_NFQWS=''
+for init in /opt/etc/init.d/S*nfqws*; do
+    if [ -x "$init" ]; then
+        INIT_NFQWS=$init
+        break
+    fi
+done
+[ -n "$INIT_NFQWS" ] || fail 'Скрипт запуска nfqws в /opt/etc/init.d не найден'
+"$INIT_NFQWS" restart || fail 'Перезапуск nfqws завершился ошибкой'
 printf 'nfqws перезапущен.\n'
