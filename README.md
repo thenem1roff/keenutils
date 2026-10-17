@@ -6,7 +6,7 @@ torrserver watchdog
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/torr_watchdog | sh
 ```
-быстрая установка nfqws
+стратегия general11 1.10.3 от flowseal (nfqws)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws | sh
 ```
