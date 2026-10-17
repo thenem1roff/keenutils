@@ -1,50 +1,151 @@
-sh -c '
-# 1. Обновление пакетов и установка зависимостей
-opkg update && opkg install ca-certificates wget-ssl jq
-opkg remove wget-nossl 2>/dev/null
+#!/bin/sh
+# Одноразовое обновление файлов и пользовательской стратегии nfqws.
+set -eu
 
-# 2. Добавление репозиториев nfqws
-mkdir -p /opt/etc/opkg
-echo "src/gz nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all" > /opt/etc/opkg/nfqws-keenetic.conf
-echo "src/gz nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all" > /opt/etc/opkg/nfqws-keenetic-web.conf
+DIR=/opt/etc/nfqws
+CONFIG="$DIR/nfqws.conf"
+API='https://api.github.com/repos/thenem1roff/keenutils/contents/nfqws_files?ref=main'
+FILES_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws_files'
+STRATEGY_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/strategy'
 
-# 3. Установка пакетов
-opkg update && opkg install nfqws-keenetic nfqws-keenetic-web
+fail() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
 
-# 4. Получение списка файлов через GitHub API и их скачивание
-mkdir -p /opt/etc/nfqws
-API_URL="https://api.github.com/repos/thenem1roff/keenutils/contents/nfqws_files"
-BASE_URL="https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws_files"
+[ -d "$DIR" ] || fail "Не найдена папка $DIR"
+[ -f "$CONFIG" ] || fail "Не найден конфиг $CONFIG"
+for program in curl jq awk mktemp; do
+    command -v "$program" >/dev/null 2>&1 || fail "Не найдена команда $program"
+done
 
-FILES=$(curl -s "$API_URL" | jq -r ".[] | select(.type==\"file\") | .name")
+TMP=$(mktemp -d "$DIR/.nfqws-update.XXXXXX") || fail 'Не удалось создать временную папку'
+trap 'rm -rf "$TMP"' 0
+trap 'exit 130' 2
+trap 'exit 143' 15
 
-if [ -n "$FILES" ]; then
-    for FILE in $FILES; do
-        wget -q -O "/opt/etc/nfqws/$FILE" "$BASE_URL/$FILE"
+# Файл strategy хранится в корне репозитория, а не в nfqws_files.
+curl -fsSL --retry 2 "$STRATEGY_URL" -o "$TMP/strategy" || fail 'Не удалось скачать strategy'
+[ -s "$TMP/strategy" ] || fail 'Файл strategy пустой'
+
+# Убираем только переносы строк: стратегии объединяются пробелами.
+# Запрещаем символы, способные выполнить shell-подстановку в nfqws.conf.
+awk '
+    index($0,"\"") || index($0,"\\") || index($0,"$") || index($0,"`") { exit 1 }
+' "$TMP/strategy" || fail 'В strategy обнаружены недопустимые символы: кавычки, обратный слеш, $, `'
+awk '
+    { sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+    length($0) { printf "%s%s", (found ? " " : ""), $0; found=1 }
+    END { print "" }
+' "$TMP/strategy" > "$TMP/strategy.line"
+STRATEGY=$(cat "$TMP/strategy.line")
+[ -n "$STRATEGY" ] || fail 'В strategy нет аргументов'
+
+# Меняем только значение NFQWS_ARGS_CUSTOM; остальные строки не редактируем.
+# Поддерживаются одно- и многострочные значения в двойных кавычках.
+awk -v new="$STRATEGY" -v oldfile="$TMP/current" '
+    function endquote(s, start,    i, c, escape) {
+        escape=0
+        for (i=start; i<=length(s); i++) {
+            c=substr(s,i,1)
+            if (c=="\\" && !escape) { escape=1; continue }
+            if (c=="\"" && !escape) return i
+            escape=0
+        }
+        return 0
+    }
+    /^[ \t]*NFQWS_ARGS_CUSTOM[ \t]*=/ {
+        seen++
+        if (seen>1 || !match($0, /^[ \t]*NFQWS_ARGS_CUSTOM[ \t]*=[ \t]*"/)) {
+            bad=1
+            exit
+        }
+        prefix=substr($0,1,RLENGTH)
+        value=substr($0,RLENGTH+1)
+        pos=endquote(value,1)
+        if (pos) {
+            old=substr(value,1,pos-1)
+            print prefix new "\"" substr(value,pos+1)
+        } else {
+            old=value "\n"
+            pending=prefix
+            inside=1
+        }
+        next
+    }
+    inside {
+        pos=endquote($0,1)
+        if (pos) {
+            old=old substr($0,1,pos-1)
+            print pending new "\"" substr($0,pos+1)
+            inside=0
+        } else {
+            old=old $0 "\n"
+        }
+        next
+    }
+    { print }
+    END {
+        if (bad || seen!=1 || inside) {
+            print "Не удалось однозначно найти NFQWS_ARGS_CUSTOM в двойных кавычках" > "/dev/stderr"
+            exit 1
+        }
+        printf "%s", old > oldfile
+    }
+' "$CONFIG" > "$TMP/config.edited" || fail 'Конфигурация не изменена'
+
+CURRENT=$(cat "$TMP/current")
+if [ -n "$CURRENT" ]; then
+    printf '\nТекущая стратегия:\n%s\n\nНовая стратегия:\n%s\n\n' "$CURRENT" "$STRATEGY"
+    printf 'Заменить NFQWS_ARGS_CUSTOM? [y/N]: '
+    [ -r /dev/tty ] || fail 'Нет терминала для подтверждения'
+    IFS= read -r reply </dev/tty || fail 'Не удалось прочитать ответ'
+    case "$reply" in
+        y|Y|yes|YES|д|Д|да|ДА) ;;
+        *) printf 'Отменено. Файлы и конфигурация не изменены.\n'; exit 0 ;;
+    esac
+fi
+
+# Заранее скачиваем все файлы, не заменяя существующие при ошибке загрузки.
+curl -fsSL --retry 2 "$API" -o "$TMP/manifest.json" || fail 'Не удалось получить список файлов'
+jq -er 'if type=="array" then [.[] | select(.type=="file") | .name] | .[] else error("wrong response") end' \
+    "$TMP/manifest.json" > "$TMP/files.txt" || fail 'Неверный список файлов GitHub'
+[ -s "$TMP/files.txt" ] || fail 'Папка nfqws_files пуста'
+
+COUNT=0
+while IFS= read -r name; do
+    case "$name" in
+        ''|.|..|*[!a-zA-Z0-9._-]*) fail "Недопустимое имя файла: $name" ;;
+    esac
+    printf 'Скачивание: %s\n' "$name"
+    curl -fsSL --retry 2 "$FILES_URL/$name" -o "$TMP/$name" || fail "Не удалось скачать $name"
+    chmod 644 "$TMP/$name" || fail "Не удалось установить права на $name"
+    COUNT=$((COUNT+1))
+done < "$TMP/files.txt"
+
+# Атомарная замена каждого файла (TMP расположен на том же файловом разделе).
+while IFS= read -r name; do
+    mv -f "$TMP/$name" "$DIR/$name" || fail "Не удалось заменить $name"
+done < "$TMP/files.txt"
+printf '\nОбновлено файлов: %s\n' "$COUNT"
+
+if [ "$CURRENT" = "$STRATEGY" ]; then
+    printf 'NFQWS_ARGS_CUSTOM не изменился. Перезапуск nfqws не нужен.\n'
+    exit 0
+fi
+
+# Копирование с сохранением прав, затем атомарная замена конфига.
+cp -p "$CONFIG" "$TMP/config.ready" || fail 'Не удалось подготовить конфигурацию'
+cat "$TMP/config.edited" > "$TMP/config.ready" || fail 'Не удалось записать новую конфигурацию'
+mv -f "$TMP/config.ready" "$CONFIG" || fail 'Не удалось заменить nfqws.conf'
+printf 'NFQWS_ARGS_CUSTOM успешно обновлён.\n'
+
+# Перезапуск только после успешного изменения стратегии.
+if command -v service >/dev/null 2>&1; then
+    service nfqws-keenetic restart || fail 'Не удалось перезапустить nfqws-keenetic'
+else
+    START_SCRIPT=''
+    for script in /opt/etc/init.d/S*nfqws*; do
+        if [ -x "$script" ]; then START_SCRIPT=$script; break; fi
     done
-    chmod 644 /opt/etc/nfqws/* 2>/dev/null
-    echo "Файлы успешно обновлены."
-else
-    echo "Ошибка: Не удалось получить список файлов с GitHub!"
+    [ -n "$START_SCRIPT" ] || fail 'Не найден скрипт перезапуска nfqws'
+    "$START_SCRIPT" restart || fail 'Не удалось перезапустить nfqws'
 fi
-
-# 5. Перезапуск службы nfqws
-INIT_NFQWS=$(ls /opt/etc/init.d/S*nfqws* 2>/dev/null | head -n 1)
-
-if [ -n "$INIT_NFQWS" ] && [ -x "$INIT_NFQWS" ]; then
-    echo "Перезапускаем nfqws..."
-    "$INIT_NFQWS" restart
-    sleep 2
-
-    # 6. Проверка, запустился ли процесс
-    if pgrep -f "nfqws" > /dev/null; then
-        echo "--- Успех: nfqws успешно перезапущен! ---"
-    else
-        echo "--- ОШИБКА: Процесс nfqws не запущен! ---"
-        exit 1
-    fi
-else
-    echo "Ошибка: Скрипт автозапуска nfqws не найден!"
-    exit 1
-fi
-'
+printf 'nfqws перезапущен.\n'
