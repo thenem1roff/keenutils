@@ -1,77 +1,219 @@
-sh -c '
-# 1. Проверка наличия всех необходимых утилит и файлов
-echo "Проверка окружения..."
+#!/bin/sh
+# Установка watchdog TorrServer для Keenetic / Entware.
+# Запуск: curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/torr_watchdog | sh
+set -eu
 
-if ! command -v curl >/dev/null 2>&1; then
-    echo "Ошибка: Утилита curl не установлена! Установите её через: opkg install curl"
+fail() {
+    printf 'ОШИБКА: %s\n' "$*" >&2
     exit 1
-fi
+}
 
-CRON_INIT=$(ls /opt/etc/init.d/S*cron* 2>/dev/null | head -n 1)
-if [ ! -f /opt/etc/crontab ] || [ -z "$CRON_INIT" ] || [ ! -x "$CRON_INIT" ]; then
-    echo "Ошибка: Cron не установлен или не настроен! Установите его через: opkg install cron"
-    exit 1
-fi
+WATCHDOG=/opt/bin/torr_watchdog.sh
+CRONTAB=/opt/etc/crontab
 
-TORR_INIT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
-if [ -z "$TORR_INIT" ] || [ ! -x "$TORR_INIT" ]; then
-    echo "Ошибка: Скрипт автозапуска TorrServer (/opt/etc/init.d/S*torrserver*) не найден или не исполняемый!"
-    exit 1
-fi
+printf 'Проверка окружения...\n'
 
-echo "Все необходимые компоненты найдены. Настройка вочдога..."
+for program in curl pgrep killall awk wc tail sync mktemp cp mv chmod mkdir rm rmdir; do
+    command -v "$program" >/dev/null 2>&1 || fail "Не найдена утилита $program"
+done
 
-# 2. Создание каталога для логов
-mkdir -p /opt/var/log
+[ -d /opt/bin ] || fail 'Каталог /opt/bin не найден'
+[ -f "$CRONTAB" ] || fail 'Не найден /opt/etc/crontab. Установите и настройте Cron.'
 
-# 3. Создание скрипта вочдога
-cat << '\''EOF'\'' > /opt/bin/torr_watchdog.sh
+CRON_INIT=''
+for init in /opt/etc/init.d/S*cron*; do
+    if [ -x "$init" ]; then
+        CRON_INIT=$init
+        break
+    fi
+done
+[ -n "$CRON_INIT" ] || fail 'Не найден исполняемый init-скрипт Cron'
+
+TORR_INIT=''
+for init in /opt/etc/init.d/S*torrserver*; do
+    if [ -x "$init" ]; then
+        TORR_INIT=$init
+        break
+    fi
+done
+[ -n "$TORR_INIT" ] || fail 'Не найден исполняемый init-скрипт TorrServer'
+
+mkdir -p /opt/var/log /opt/var/backups || fail 'Не удалось создать служебные каталоги'
+
+TMP_WATCHDOG=''
+TMP_CRON=''
+cleanup() {
+    [ -z "$TMP_WATCHDOG" ] || rm -f "$TMP_WATCHDOG"
+    [ -z "$TMP_CRON" ] || rm -f "$TMP_CRON"
+}
+trap cleanup 0
+trap 'exit 130' 2
+trap 'exit 143' 15
+
+TMP_WATCHDOG=$(mktemp /opt/bin/.torr_watchdog.install.XXXXXX) || fail 'Не удалось создать временный файл watchdog'
+TMP_CRON=$(mktemp /opt/etc/.crontab.torr_watchdog.XXXXXX) || fail 'Не удалось создать временный crontab'
+
+cat > "$TMP_WATCHDOG" <<'WATCHDOG_SCRIPT'
 #!/bin/sh
 
 LOG_FILE="/opt/var/log/torr_watchdog.log"
-MAX_LOG_LINES=10000
+LOCK_DIR="/tmp/torr_watchdog.lock"
+API_URL="http://127.0.0.1:8090/echo"
 
-log_message() {
-    echo "$(date '\''+%Y-%m-%d %H:%M:%S'\'') - $1" >> "$LOG_FILE"
-}
+# Блокировка параллельных запусков.
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    sleep 1
+    OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null)
 
-INIT_SCRIPT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+    case "$OLD_PID" in
+        ''|*[!0-9]*) ;;
+        *)
+            if kill -0 "$OLD_PID" 2>/dev/null; then
+                exit 0
+            fi
+            ;;
+    esac
 
-if [ -z "$INIT_SCRIPT" ]; then
-    log_message "ОШИБКА: Скрипт автозапуска /opt/etc/init.d/S*torrserver* не найден!"
-    exit 1
+    # Удаление блокировки аварийно завершённого watchdog.
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null || exit 0
+    mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 fi
 
-if ! pgrep -f "torrserver" > /dev/null; then
-    log_message "ПРЕДУПРЕЖДЕНИЕ: Процесс TorrServer отсутствует в системе. Запуск..."
-    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+printf '%s\n' "$$" > "$LOCK_DIR/pid" || exit 1
+
+cleanup() {
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+trap cleanup 0
+trap 'exit 1' 1 2 3 15
+
+# Пишем в журнал только при сбоях и восстановлении.
+log_message() {
+    MESSAGE="$(date '+%Y-%m-%d %H:%M:%S') - $1"
+    printf '%s\n' "$MESSAGE" >> "$LOG_FILE"
+    if command -v logger >/dev/null 2>&1; then
+        logger -t torr_watchdog "$1" 2>/dev/null || :
+    fi
+    sync
+
+    # Обрезаем журнал, только если он превысил 512 КиБ.
+    SIZE=$(wc -c < "$LOG_FILE" 2>/dev/null)
+    if [ "${SIZE:-0}" -gt 524288 ]; then
+        tail -n 500 "$LOG_FILE" > "$LOG_FILE.tmp.$$" &&
+            mv -f "$LOG_FILE.tmp.$$" "$LOG_FILE"
+    fi
+}
+
+check_api() {
+    curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout 5 --max-time 5 "$API_URL"
+}
+
+start_server() {
+    INIT_SCRIPT=$(ls /opt/etc/init.d/S*torrserver* 2>/dev/null | head -n 1)
+
+    if [ -z "$INIT_SCRIPT" ] || [ ! -x "$INIT_SCRIPT" ]; then
+        log_message "ОШИБКА: Скрипт запуска TorrServer не найден"
+        return 1
+    fi
+
+    log_message "Попытка запуска TorrServer"
+
+    if ! "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1; then
+        log_message "ОШИБКА: Команда запуска завершилась неудачно"
+        return 1
+    fi
+
+    i=0
+    while [ "$i" -lt 3 ]; do
+        sleep 2
+        CODE=$(check_api)
+        if [ "$CODE" = "200" ] &&
+            pgrep -x torrserver >/dev/null 2>&1; then
+            log_message "УСПЕХ: TorrServer запущен, HTTP 200"
+            return 0
+        fi
+        i=$((i + 1))
+    done
+
+    log_message "ОШИБКА: После запуска API не отвечает (HTTP $CODE)"
+    return 1
+}
+
+PIDS=$(pgrep -x torrserver 2>/dev/null)
+
+if [ -z "$PIDS" ]; then
+    log_message "ПРЕДУПРЕЖДЕНИЕ: Процесс TorrServer отсутствует"
+    start_server
+    exit $?
+fi
+
+HTTP_CODE=$(check_api)
+if [ "$HTTP_CODE" = "200" ]; then
     exit 0
 fi
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -m 5 http://127.0.0.1:8090/echo)
-
-if [ "$HTTP_CODE" != "200" ]; then
-    log_message "ОШИБКА: Процесс найден, но API не отвечает (Код: $HTTP_CODE). Сервер завис (зомби). Перезапуск..."
-    killall -9 torrserver 2>/dev/null
-    sleep 1
-    "$INIT_SCRIPT" start >> "$LOG_FILE" 2>&1
+# Не убиваем процесс из-за одиночного кратковременного сбоя API.
+sleep 2
+HTTP_RETRY=$(check_api)
+if [ "$HTTP_RETRY" = "200" ]; then
+    exit 0
 fi
 
-if [ -f "$LOG_FILE" ]; then
-    tail -n "$MAX_LOG_LINES" "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+STATES=""
+for PID in $PIDS; do
+    STATE=$(awk '{print $3}' "/proc/$PID/stat" 2>/dev/null)
+    STATES="$STATES PID=$PID:${STATE:-?}"
+done
+
+log_message "ОШИБКА: API не отвечает (HTTP $HTTP_CODE/$HTTP_RETRY).$STATES"
+
+# Прежний способ восстановления при зависании TorrServer.
+killall -9 torrserver 2>/dev/null || :
+sleep 1
+
+REMAINING=$(pgrep -x torrserver 2>/dev/null)
+if [ -n "$REMAINING" ]; then
+    log_message "ОШИБКА: После killall процессы остались: $REMAINING"
+    exit 1
 fi
-EOF
 
-# 4. Выдача прав на исполнение
-chmod +x /opt/bin/torr_watchdog.sh
+start_server
+WATCHDOG_SCRIPT
 
-# 5. Настройка Cron (запуск каждые 30 секунд)
-sed -i '\''/torr_watchdog.sh/d'\'' /opt/etc/crontab
-echo "* * * * * root /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
-echo "* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh" >> /opt/etc/crontab
+sh -n "$TMP_WATCHDOG" || fail 'Синтаксическая ошибка в watchdog'
+chmod 755 "$TMP_WATCHDOG" || fail 'Не удалось установить права watchdog'
 
-# 6. Перезапуск службы Cron
-"$CRON_INIT" restart
+# Сохраняем прочие задачи Cron. Удаляем только старые задания
+# watchdog и устаревшую ежедневную очистку его журнала.
+cp -p "$CRONTAB" "$TMP_CRON" || fail 'Не удалось подготовить crontab'
+awk '
+    index($0, "/opt/bin/torr_watchdog.sh") { next }
+    index($0, "torr_watchdog.log") && index($0, "OK: TorrServer") && index($0, "sed -i") { next }
+    { print }
+' "$CRONTAB" > "$TMP_CRON" || fail 'Не удалось обработать crontab'
 
-echo "--- Настройка вочдога TorrServer успешно завершена! ---"
-'
+printf '%s\n' \
+    '* * * * * root /opt/bin/torr_watchdog.sh' \
+    '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' \
+    >> "$TMP_CRON" || fail 'Не удалось добавить задания Cron'
+
+# Резервируем обе изменяемые настройки перед установкой.
+BACKUP_DIR=$(mktemp -d /opt/var/backups/torr_watchdog_XXXXXXXX) || fail 'Не удалось создать каталог резервной копии'
+cp -p "$CRONTAB" "$BACKUP_DIR/crontab" || fail 'Не удалось сохранить резервную копию crontab'
+if [ -f "$WATCHDOG" ]; then
+    cp -p "$WATCHDOG" "$BACKUP_DIR/torr_watchdog.sh" || fail 'Не удалось сохранить резервную копию watchdog'
+fi
+
+mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
+TMP_WATCHDOG=''
+mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
+TMP_CRON=''
+
+"$CRON_INIT" restart || fail "Не удалось перезапустить Cron. Копии: $BACKUP_DIR"
+
+printf 'Watchdog установлен. Проверки каждые 30 секунд.\n'
+printf 'Ежедневная очистка лога отключена; журнал пишется только при событиях.\n'
+printf 'Резервные копии: %s\n' "$BACKUP_DIR"
