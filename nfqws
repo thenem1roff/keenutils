@@ -69,6 +69,85 @@ confirm_yes() {
     done
 }
 
+# nfqws-keenetic: исполняемый файл, конфигурация и init-скрипт Entware.
+# nfqws-keenetic-web не имеет своего исполняемого файла: это веб-сайт lighttpd.
+NFQWS_BIN=/opt/usr/bin/nfqws
+WEB_INDEX=/opt/share/www/nfqws/index.html
+WEB_CONFIG=/opt/etc/nfqws_web.conf
+
+package_installed() {
+    command -v opkg >/dev/null 2>&1 || return 1
+    opkg list-installed "$1" 2>/dev/null |
+        awk -v pkg="$1" '$1==pkg && $2=="-" {found=1} END {exit !found}'
+}
+
+nfqws_files_present() {
+    [ -x "$NFQWS_BIN" ] && [ -f "$CONFIG" ] || return 1
+    for init in /opt/etc/init.d/S*nfqws*; do
+        [ -x "$init" ] && return 0
+    done
+    return 1
+}
+
+web_files_present() {
+    [ -f "$WEB_INDEX" ] && [ -f "$WEB_CONFIG" ]
+}
+
+# Проверяем фиксированные пути и статус пакетов; полный поиск на флешке не нужен.
+printf 'Проверка установки nfqws-keenetic и nfqws-keenetic-web...\n'
+MISSING_NFQWS=0
+MISSING_WEB=0
+nfqws_files_present || MISSING_NFQWS=1
+web_files_present || MISSING_WEB=1
+if command -v opkg >/dev/null 2>&1; then
+    package_installed nfqws-keenetic || MISSING_NFQWS=1
+    package_installed nfqws-keenetic-web || MISSING_WEB=1
+fi
+
+if [ "$MISSING_NFQWS" -eq 0 ]; then
+    printf 'nfqws-keenetic: установлен (%s).\n' "$NFQWS_BIN"
+else
+    printf 'nfqws-keenetic: не найден или установлен неполностью.\n'
+    printf 'Проверяемые пути: %s, %s и /opt/etc/init.d/S*nfqws*\n' "$NFQWS_BIN" "$CONFIG"
+fi
+if [ "$MISSING_WEB" -eq 0 ]; then
+    printf 'nfqws-keenetic-web: установлен (%s).\n' "$WEB_INDEX"
+else
+    printf 'nfqws-keenetic-web: не найден или установлен неполностью.\n'
+    printf 'Проверяемые пути: %s, %s\n' "$WEB_INDEX" "$WEB_CONFIG"
+fi
+
+if [ "$MISSING_NFQWS" -eq 1 ] || [ "$MISSING_WEB" -eq 1 ]; then
+    if ! confirm_yes 'Установить nfqws-keenetic и nfqws-keenetic-web через opkg?'; then
+        printf 'Установка отменена. Изменения не внесены.\n'
+        exit 0
+    fi
+
+    command -v opkg >/dev/null 2>&1 || fail 'Не найден opkg: для установки нужен Entware'
+    printf '\nУстановка зависимостей...\n'
+    opkg update || fail 'Ошибка opkg update'
+    opkg install ca-certificates wget-ssl jq || fail 'Ошибка установки зависимостей'
+    # Если wget-nossl отсутствует, удалять нечего.
+    if package_installed wget-nossl; then
+        opkg remove wget-nossl 2>/dev/null || fail 'Не удалось удалить wget-nossl'
+    fi
+
+    mkdir -p /opt/etc/opkg || fail 'Не удалось создать /opt/etc/opkg'
+    printf '%s\n' 'src/gz nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all' > /opt/etc/opkg/nfqws-keenetic.conf ||
+        fail 'Не удалось добавить репозиторий nfqws-keenetic'
+    printf '%s\n' 'src/gz nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all' > /opt/etc/opkg/nfqws-keenetic-web.conf ||
+        fail 'Не удалось добавить репозиторий nfqws-keenetic-web'
+
+    opkg update || fail 'Не удалось обновить список новых репозиториев'
+    opkg install nfqws-keenetic nfqws-keenetic-web || fail 'Не удалось установить nfqws-keenetic и nfqws-keenetic-web'
+
+    package_installed nfqws-keenetic || fail 'opkg не подтверждает установку nfqws-keenetic'
+    package_installed nfqws-keenetic-web || fail 'opkg не подтверждает установку nfqws-keenetic-web'
+    nfqws_files_present || fail "После установки не найдены $NFQWS_BIN, $CONFIG или init-скрипт"
+    web_files_present || fail "После установки не найдены $WEB_INDEX или $WEB_CONFIG"
+    printf 'Оба пакета установлены и проверены.\n'
+fi
+
 [ -d "$DIR" ] || fail "Не найдена папка $DIR"
 [ -f "$CONFIG" ] || fail "Не найден конфиг $CONFIG"
 for program in curl jq awk mktemp tr cmp; do
