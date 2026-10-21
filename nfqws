@@ -264,5 +264,6 @@ for init in /opt/etc/init.d/S*nfqws*; do
 done
 [ -n "$INIT_NFQWS" ] || fail 'Скрипт запуска nfqws в /opt/etc/init.d не найден'
 "$INIT_NFQWS" restart || fail 'Перезапуск nfqws завершился ошибкой'
+verify_saved_strategy || fail 'После перезапуска стратегия в nfqws.conf изменилась'
 verify_running_strategy
 printf 'nfqws перезапущен. Новая стратегия подтверждена в аргументах процесса.\n'
