@@ -4,11 +4,93 @@ set -eu
 
 DIR=/opt/etc/nfqws
 CONFIG="$DIR/nfqws.conf"
+RUN_CONFIG="$CONFIG.run"
+PIDFILE=/opt/var/run/nfqws.pid
 API='https://api.github.com/repos/thenem1roff/keenutils/contents/nfqws_files?ref=main'
 FILES_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws_files'
 STRATEGY_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/strategy'
 
 fail() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
+
+# Проверяем значение именно NFQWS_ARGS_CUSTOM, включая многострочную стратегию.
+# Конфигурацию не выполняем как shell-код.
+verify_saved_strategy() {
+    awk -v expected="$STRATEGY" '
+        function quote_pos(s,    i) {
+            for (i=1; i<=length(s); i++)
+                if (substr(s,i,1)=="\"") return i
+            return 0
+        }
+        inside {
+            pos=quote_pos($0)
+            if (pos) {
+                value=value substr($0,1,pos-1)
+                inside=0
+                complete=1
+            } else {
+                value=value $0 "\n"
+            }
+            next
+        }
+        /^[ \t]*NFQWS_ARGS_CUSTOM[ \t]*=/ {
+            seen++
+            if (seen>1 || !match($0,/^[ \t]*NFQWS_ARGS_CUSTOM[ \t]*=[ \t]*"/)) {
+                invalid=1
+                exit
+            }
+            rest=substr($0,RLENGTH+1)
+            pos=quote_pos(rest)
+            if (pos) {
+                value=substr(rest,1,pos-1)
+                complete=1
+            } else {
+                value=rest "\n"
+                inside=1
+            }
+        }
+        END {
+            if (invalid || seen!=1 || inside || !complete || value!=expected)
+                exit 1
+        }
+    ' "$CONFIG"
+}
+
+# nfqws.conf.run не содержит NFQWS_ARGS_CUSTOM в штатном nfqws-keenetic.
+# Поэтому сравниваем аргументы реально запущенного процесса с файлом strategy.
+verify_running_strategy() {
+    [ -s "$RUN_CONFIG" ] || fail "После перезапуска не найден $RUN_CONFIG"
+    [ -s "$PIDFILE" ] || fail "После перезапуска не найден $PIDFILE"
+    PID=$(cat "$PIDFILE") || fail 'Не удалось прочитать PID nfqws'
+    case "$PID" in
+        ''|*[!0-9]*) fail "Некорректный PID nfqws: $PID" ;;
+    esac
+    kill -0 "$PID" 2>/dev/null || fail "Процесс nfqws (PID $PID) не работает"
+    [ -r "/proc/$PID/cmdline" ] || fail "Не удалось прочитать аргументы процесса $PID"
+    tr '\000' '\n' < "/proc/$PID/cmdline" > "$TMP/process.args" ||
+        fail 'Не удалось получить аргументы nfqws'
+
+    # Аргументы должны идти подряд и завершаться разделителем --new.
+    # Сравнение по отдельным аргументам учитывает переносы строк в strategy.
+    awk '
+        NR==FNR {
+            for (i=1; i<=NF; i++) expected[++n]=$i
+            next
+        }
+        { actual[++m]=$0 }
+        END {
+            if (!n || !m || actual[1] !~ /(^|\/)nfqws$/) exit 1
+            for (i=2; i<=m-n; i++) {
+                ok=1
+                for (j=1; j<=n; j++) {
+                    if (actual[i+j-1]!=expected[j]) { ok=0; break }
+                }
+                if (ok && actual[i+n]=="--new") exit 0
+            }
+            exit 1
+        }
+    ' "$TMP/strategy" "$TMP/process.args" ||
+        fail 'Запущенный nfqws не содержит полную новую стратегию в аргументах'
+}
 
 # Читаем ответы с терминала: стандартный ввод занят самим скриптом (curl | sh).
 # Пустой ответ означает "да"; удаляем CR для совместимости с терминалами.
@@ -28,7 +110,7 @@ confirm_yes() {
 
 [ -d "$DIR" ] || fail "Не найдена папка $DIR"
 [ -f "$CONFIG" ] || fail "Не найден конфиг $CONFIG"
-for program in curl jq awk mktemp tr; do
+for program in curl jq awk mktemp tr cmp; do
     command -v "$program" >/dev/null 2>&1 || fail "Не найдена команда $program"
 done
 
@@ -167,7 +249,9 @@ fi
 cp -p "$CONFIG" "$TMP/config.ready" || fail 'Не удалось подготовить конфигурацию'
 cat "$TMP/config.edited" > "$TMP/config.ready" || fail 'Не удалось записать новую конфигурацию'
 mv -f "$TMP/config.ready" "$CONFIG" || fail 'Не удалось заменить nfqws.conf'
-printf 'NFQWS_ARGS_CUSTOM успешно обновлён.\n'
+cmp -s "$CONFIG" "$TMP/config.edited" || fail 'Сохранённый nfqws.conf отличается от подготовленного'
+verify_saved_strategy || fail 'NFQWS_ARGS_CUSTOM не совпадает с новой стратегией в nfqws.conf'
+printf 'NFQWS_ARGS_CUSTOM записан и проверен в nfqws.conf.\n'
 
 # Перезапуск только после успешного изменения стратегии.
 # Используем init-скрипт Entware, как в прежнем рабочем установщике.
@@ -180,4 +264,5 @@ for init in /opt/etc/init.d/S*nfqws*; do
 done
 [ -n "$INIT_NFQWS" ] || fail 'Скрипт запуска nfqws в /opt/etc/init.d не найден'
 "$INIT_NFQWS" restart || fail 'Перезапуск nfqws завершился ошибкой'
-printf 'nfqws перезапущен.\n'
+verify_running_strategy
+printf 'nfqws перезапущен. Новая стратегия подтверждена в аргументах процесса.\n'
