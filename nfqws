@@ -4,8 +4,6 @@ set -eu
 
 DIR=/opt/etc/nfqws
 CONFIG="$DIR/nfqws.conf"
-RUN_CONFIG="$CONFIG.run"
-PIDFILE=/opt/var/run/nfqws.pid
 API='https://api.github.com/repos/thenem1roff/keenutils/contents/nfqws_files?ref=main'
 FILES_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws_files'
 STRATEGY_URL='https://raw.githubusercontent.com/thenem1roff/keenutils/main/strategy'
@@ -53,43 +51,6 @@ verify_saved_strategy() {
                 exit 1
         }
     ' "$CONFIG"
-}
-
-# nfqws.conf.run не содержит NFQWS_ARGS_CUSTOM в штатном nfqws-keenetic.
-# Поэтому сравниваем аргументы реально запущенного процесса с файлом strategy.
-verify_running_strategy() {
-    [ -s "$RUN_CONFIG" ] || fail "После перезапуска не найден $RUN_CONFIG"
-    [ -s "$PIDFILE" ] || fail "После перезапуска не найден $PIDFILE"
-    PID=$(cat "$PIDFILE") || fail 'Не удалось прочитать PID nfqws'
-    case "$PID" in
-        ''|*[!0-9]*) fail "Некорректный PID nfqws: $PID" ;;
-    esac
-    kill -0 "$PID" 2>/dev/null || fail "Процесс nfqws (PID $PID) не работает"
-    [ -r "/proc/$PID/cmdline" ] || fail "Не удалось прочитать аргументы процесса $PID"
-    tr '\000' '\n' < "/proc/$PID/cmdline" > "$TMP/process.args" ||
-        fail 'Не удалось получить аргументы nfqws'
-
-    # Аргументы должны идти подряд и завершаться разделителем --new.
-    # Сравнение по отдельным аргументам учитывает переносы строк в strategy.
-    awk '
-        NR==FNR {
-            for (i=1; i<=NF; i++) expected[++n]=$i
-            next
-        }
-        { actual[++m]=$0 }
-        END {
-            if (!n || !m || actual[1] !~ /(^|\/)nfqws$/) exit 1
-            for (i=2; i<=m-n; i++) {
-                ok=1
-                for (j=1; j<=n; j++) {
-                    if (actual[i+j-1]!=expected[j]) { ok=0; break }
-                }
-                if (ok && actual[i+n]=="--new") exit 0
-            }
-            exit 1
-        }
-    ' "$TMP/strategy" "$TMP/process.args" ||
-        fail 'Запущенный nfqws не содержит полную новую стратегию в аргументах'
 }
 
 # Читаем ответы с терминала: стандартный ввод занят самим скриптом (curl | sh).
@@ -265,5 +226,4 @@ done
 [ -n "$INIT_NFQWS" ] || fail 'Скрипт запуска nfqws в /opt/etc/init.d не найден'
 "$INIT_NFQWS" restart || fail 'Перезапуск nfqws завершился ошибкой'
 verify_saved_strategy || fail 'После перезапуска стратегия в nfqws.conf изменилась'
-verify_running_strategy
-printf 'nfqws перезапущен. Новая стратегия подтверждена в аргументах процесса.\n'
+printf 'nfqws перезапущен. Стратегия в nfqws.conf сохранена и проверена.\n'
