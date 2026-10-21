@@ -53,6 +53,34 @@ verify_saved_strategy() {
     ' "$CONFIG"
 }
 
+# Перед изменением конфига проверяем файлы, указанные в новой стратегии.
+# Не останавливаем работающую службу, если в стратегии не хватает файлов.
+verify_strategy_files() {
+    awk '
+        {
+            for (i=1; i<=NF; i++) {
+                arg=$i
+                if (arg ~ /^--(hostlist|hostlist-exclude|ipset|ipset-exclude|dpi-desync-fake-[^=]+|dpi-desync-split-seqovl-pattern)=\/opt\//) {
+                    pos=index(arg,"=")
+                    path=substr(arg,pos+1)
+                    if (!seen[path]++) print path
+                }
+            }
+        }
+    ' "$TMP/strategy" > "$TMP/strategy.paths" ||
+        fail 'Не удалось проверить пути файлов в стратегии'
+
+    missing=0
+    while IFS= read -r file; do
+        if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+            printf 'Отсутствует или недоступен файл стратегии: %s\n' "$file" >&2
+            missing=1
+        fi
+    done < "$TMP/strategy.paths"
+    [ "$missing" -eq 0 ] ||
+        fail 'Не все файлы стратегии доступны. Восстановите их или обновите nfqws_files и повторите запуск'
+}
+
 # Читаем ответы с терминала: стандартный ввод занят самим скриптом (curl | sh).
 # Пустой ответ означает "да"; удаляем CR для совместимости с терминалами.
 confirm_yes() {
@@ -309,6 +337,9 @@ if [ "$UPDATE_STRATEGY" -eq 0 ]; then
     exit 0
 fi
 
+# Проверяем файлы до перезапуска и записи стратегии в рабочий конфиг.
+verify_strategy_files
+
 # Копирование с сохранением прав, затем атомарная замена конфига.
 cp -p "$CONFIG" "$TMP/config.ready" || fail 'Не удалось подготовить конфигурацию'
 cat "$TMP/config.edited" > "$TMP/config.ready" || fail 'Не удалось записать новую конфигурацию'
@@ -327,6 +358,26 @@ for init in /opt/etc/init.d/S*nfqws*; do
     fi
 done
 [ -n "$INIT_NFQWS" ] || fail 'Скрипт запуска nfqws в /opt/etc/init.d не найден'
-"$INIT_NFQWS" restart || fail 'Перезапуск nfqws завершился ошибкой'
+# Сохраняем весь вывод службы во временный журнал. Показываем его
+# только при ошибке, чтобы успешный запуск не засорял консоль.
+if ! "$INIT_NFQWS" restart > "$TMP/restart.log" 2>&1; then
+    cat "$TMP/restart.log" >&2
+    fail 'Команда перезапуска nfqws завершилась ошибкой'
+fi
+
+# nfqws запускается как демон: init-скрипт может вернуть успех, хотя
+# дочерний процесс сразу завершился (например, из-за отсутствующего списка).
+# Даем демону время запуститься и проверяем status два раза подряд.
+sleep 2
+if ! "$INIT_NFQWS" status > /dev/null 2>&1; then
+    cat "$TMP/restart.log" >&2
+    fail 'После перезапуска служба nfqws не работает'
+fi
+sleep 1
+if ! "$INIT_NFQWS" status > /dev/null 2>&1; then
+    cat "$TMP/restart.log" >&2
+    fail 'После перезапуска служба nfqws остановилась'
+fi
+
 verify_saved_strategy || fail 'После перезапуска стратегия в nfqws.conf изменилась'
-printf 'nfqws перезапущен. Стратегия в nfqws.conf сохранена и проверена.\n'
+printf 'nfqws перезапущен. Служба работает, стратегия в nfqws.conf проверена.\n'
