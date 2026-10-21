@@ -69,6 +69,21 @@ confirm_yes() {
     done
 }
 
+# Такой же вопрос, но Enter означает "нет": не засоряем консоль текстом стратегии.
+confirm_no() {
+    [ -r /dev/tty ] || fail 'Не найден терминал для подтверждения'
+    while :; do
+        printf '%s [y/N]: ' "$1" > /dev/tty
+        IFS= read -r reply </dev/tty || fail 'Не удалось прочитать ответ'
+        reply=$(printf '%s' "$reply" | tr -d '\r')
+        case "$reply" in
+            y|Y|yes|YES|д|Д|да|ДА) return 0 ;;
+            ''|n|N|no|NO|н|Н|нет|НЕТ) return 1 ;;
+            *) printf 'Непонятный ответ. Введите y или n.\n' > /dev/tty ;;
+        esac
+    done
+}
+
 # nfqws-keenetic: исполняемый файл, конфигурация и init-скрипт Entware.
 # nfqws-keenetic-web не имеет своего исполняемого файла: это веб-сайт lighttpd.
 NFQWS_BIN=/opt/usr/bin/nfqws
@@ -231,13 +246,22 @@ UPDATE_FILES=0
 
 if [ "$CURRENT" = "$STRATEGY" ]; then
     printf 'Стратегия уже совпадает с GitHub. Изменять nfqws.conf не требуется.\n'
+    if confirm_no 'Показать текст стратегии?'; then
+        printf '\nСтратегия:\n%s\n\n' "$STRATEGY"
+    fi
 elif [ -z "$CURRENT" ]; then
-    printf '\nNFQWS_ARGS_CUSTOM пуст.\n\nНовая стратегия:\n%s\n\n' "$STRATEGY"
+    printf '\nNFQWS_ARGS_CUSTOM пуст.\n'
+    if confirm_no 'Показать новую стратегию?'; then
+        printf '\nНовая стратегия:\n%s\n\n' "$STRATEGY"
+    fi
     if confirm_yes 'Добавить стратегию в NFQWS_ARGS_CUSTOM?'; then
         UPDATE_STRATEGY=1
     fi
 else
-    printf '\nТекущая стратегия:\n%s\n\nНовая стратегия:\n%s\n\n' "$CURRENT" "$STRATEGY"
+    printf '\nСтратегия в nfqws.conf отличается от GitHub.\n'
+    if confirm_no 'Показать текущую и новую стратегии?'; then
+        printf '\nТекущая стратегия:\n%s\n\nНовая стратегия:\n%s\n\n' "$CURRENT" "$STRATEGY"
+    fi
     if confirm_yes 'Заменить NFQWS_ARGS_CUSTOM?'; then
         UPDATE_STRATEGY=1
     fi
