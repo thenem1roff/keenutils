@@ -365,16 +365,22 @@ if ! "$INIT_NFQWS" restart > "$TMP/restart.log" 2>&1; then
     fail 'Команда перезапуска nfqws завершилась ошибкой'
 fi
 
-# nfqws запускается как демон: init-скрипт может вернуть успех, хотя
-# дочерний процесс сразу завершился (например, из-за отсутствующего списка).
-# Даем демону время запуститься и проверяем status два раза подряд.
+# В штатном init-скрипте nfqws-keenetic команда status возвращает 0
+# даже при состоянии "stopped". Поэтому проверяем сам текст ответа.
+service_running() {
+    result=$("$INIT_NFQWS" status 2>/dev/null) || return 1
+    [ "$result" = 'Service NFQWS is running' ]
+}
+
+# nfqws запускается как демон и может аварийно завершиться после
+# формального успеха команды restart. Проверяем состояние два раза.
 sleep 2
-if ! "$INIT_NFQWS" status > /dev/null 2>&1; then
+if ! service_running; then
     cat "$TMP/restart.log" >&2
     fail 'После перезапуска служба nfqws не работает'
 fi
 sleep 1
-if ! "$INIT_NFQWS" status > /dev/null 2>&1; then
+if ! service_running; then
     cat "$TMP/restart.log" >&2
     fail 'После перезапуска служба nfqws остановилась'
 fi
