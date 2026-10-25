@@ -222,6 +222,119 @@ update_keenutils() {
     KEENUTILS_UPDATED=1
 }
 
+# Central catalog is loaded on demand. Never execute sources.conf as shell code.
+# The catalog may change URLs only within known upstream repositories.
+SOURCES_CACHE=/opt/etc/keenutils/sources.conf
+SOURCES_READY=0
+SOURCE_URL=''
+SOURCE_MIRROR=''
+source_url_allowed() {
+    src_key=$1
+    src_address=$2
+    # Reject untrusted schemes, query strings, whitespace and path traversal.
+    case "$src_address" in
+        https://*) ;;
+        *) return 1 ;;
+    esac
+    case "$src_address" in
+        *..*|*[!a-zA-Z0-9._/:@+-]*) return 1 ;;
+    esac
+    case "$src_key:$src_address" in
+        nfqws_feed:https://nfqws.github.io/nfqws-keenetic/*|\
+        nfqws2_feed:https://nfqws.github.io/nfqws2-keenetic/*|\
+        nfqws_web_feed:https://nfqws.github.io/nfqws-keenetic-web/*|\
+        nfqws_menu:https://raw.githubusercontent.com/rndnaame/nfqws-menu/*|\
+        nfqws_menu:https://cdn.jsdelivr.net/gh/rndnaame/nfqws-menu@*|\
+        keenkit:https://raw.githubusercontent.com/spatiumstas/KeenKit/*|\
+        keenkit:https://cdn.jsdelivr.net/gh/spatiumstas/KeenKit@*|\
+        hydra:https://git.zerrolabs.org/Ground-Zerro/release/*|\
+        awg:https://raw.githubusercontent.com/hoaxisr/awg-manager/*|\
+        awg:https://cdn.jsdelivr.net/gh/hoaxisr/awg-manager@*|\
+        torrserver:https://raw.githubusercontent.com/thenem1roff/keenutils/*|\
+        torrserver:https://cdn.jsdelivr.net/gh/thenem1roff/keenutils@*|\
+        torr_watchdog:https://raw.githubusercontent.com/thenem1roff/keenutils/*|\
+        torr_watchdog:https://cdn.jsdelivr.net/gh/thenem1roff/keenutils@*)
+            return 0 ;;
+    esac
+    return 1
+}
+sources_validate() {
+    [ -s "$1" ] || return 1
+    # Every known entry is mandatory, unique and must be owned by its upstream.
+    for src_key in nfqws_feed nfqws2_feed nfqws_web_feed nfqws_menu \
+                   keenkit hydra awg torrserver torr_watchdog; do
+        src_found=$(awk -F '|' -v key="$src_key" '$1==key{n++}END{print n+0}' "$1")
+        [ "$src_found" = 1 ] || return 1
+    done
+    while IFS='|' read -r src_key src_primary src_backup src_extra ||
+          [ -n "$src_key" ]; do
+        case "$src_key" in ''|\#*) continue ;; esac
+        [ -z "$src_extra" ] && [ -n "$src_primary" ] || return 1
+        source_url_allowed "$src_key" "$src_primary" || return 1
+        if [ -n "$src_backup" ]; then
+            source_url_allowed "$src_key" "$src_backup" || return 1
+        fi
+    done < "$1"
+}
+sources_refresh() {
+    if [ "$SOURCES_READY" -eq 1 ]; then return 0; fi
+    mkdir -p /opt/etc/keenutils || return 1
+    ensure_mktemp || return 1
+    src_temp=$(mktemp /opt/etc/keenutils/.sources.XXXXXX) || return 1
+    src_ok=0
+    if have wget && wget -q -O "$src_temp" "$BASE_URL/sources.conf"; then
+        src_ok=1
+    elif have curl && curl -fLSs --connect-timeout 5 --max-time 20 \
+                         -o "$src_temp" "$BASE_URL/sources.conf"; then
+        src_ok=1
+    fi
+    if [ "$src_ok" -eq 1 ] && sources_validate "$src_temp"; then
+        chmod 600 "$src_temp" && mv -f "$src_temp" "$SOURCES_CACHE" ||
+            { rm -f "$src_temp"; err 'Не удалось сохранить каталог источников.'; return 1; }
+        say 'Список официальных источников обновлён.'
+    else
+        rm -f "$src_temp"
+        if ! sources_validate "$SOURCES_CACHE"; then
+            err 'Не удалось получить проверенный sources.conf, локальной копии нет.'
+            return 1
+        fi
+        say 'GitHub недоступен: используется последний проверенный sources.conf.'
+    fi
+    SOURCES_READY=1
+}
+source_get() {
+    sources_refresh || return 1
+    SOURCE_URL=$(awk -F '|' -v key="$1" '$1==key {print $2; exit}' "$SOURCES_CACHE")
+    SOURCE_MIRROR=$(awk -F '|' -v key="$1" '$1==key {print $3; exit}' "$SOURCES_CACHE")
+    [ -n "$SOURCE_URL" ] || return 1
+}
+# Download an upstream script only to a temporary file; never pipe it into sh.
+source_download_once() {
+    src_attempt_url=$1
+    src_attempt_dest=$2
+    if have wget && wget -q -O "$src_attempt_dest" "$src_attempt_url" &&
+        [ -s "$src_attempt_dest" ]; then
+        return 0
+    fi
+    if have curl && curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 \
+        -o "$src_attempt_dest" "$src_attempt_url" && [ -s "$src_attempt_dest" ]; then
+        return 0
+    fi
+    return 1
+}
+source_download() {
+    source_get "$1" || return 1
+    src_destination=$2
+    say "Источник: $SOURCE_URL"
+    source_download_once "$SOURCE_URL" "$src_destination" && return 0
+    if [ -n "$SOURCE_MIRROR" ]; then
+        say "Резервный официальный адрес: $SOURCE_MIRROR"
+        source_download_once "$SOURCE_MIRROR" "$src_destination" && return 0
+    fi
+    err 'Ни один проверенный источник установщика не ответил.'
+    return 1
+}
+
 repo_add() {
     name=$1
     feed=$2
@@ -238,22 +351,18 @@ repo_add() {
     say "Добавлен репозиторий: $name"
 }
 fetch_and_run() {
-    url=$1
-    label=$2
-    ensure_curl || return 1
-    say "Источник: $url"
-    ask_yes "Запустить официальный внешний установщик $label?" yes || { say "Действие отменено."; return 2; }
-    if ! have mktemp; then
-        install_pkg coreutils-mktemp && have mktemp ||
-            { err 'Не удалось установить mktemp.'; return 1; }
-    fi
-    temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
-    TMP_FILES="$TMP_FILES $temp"
-    curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 -o "$temp" "$url" ||
+    fetch_key=$1
+    fetch_label=$2
+    ask_yes "Скачать и запустить официальный установщик $fetch_label?" yes ||
+        { say 'Действие отменено.'; return 2; }
+    ensure_mktemp || return 1
+    fetch_temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
+    TMP_FILES="$TMP_FILES $fetch_temp"
+    source_download "$fetch_key" "$fetch_temp" ||
         { err 'Не удалось скачать установщик.'; return 1; }
-    [ -s "$temp" ] && sh -n "$temp" ||
-        { err 'Скрипт пуст или содержит ошибки синтаксиса sh.'; return 1; }
-    sh "$temp"
+    sh -n "$fetch_temp" ||
+        { err 'Скрипт содержит ошибку синтаксиса sh.'; return 1; }
+    sh "$fetch_temp"
 }
 install_nfqws() {
     if pkg_installed nfqws-keenetic; then say 'nfqws уже установлен.'; return 0; fi
@@ -263,7 +372,8 @@ install_nfqws() {
     fi
     ask_yes 'Продолжить установку nfqws?' yes || return 0
     ensure_ssl_wget || return 1
-    repo_add nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all || return 1
+    source_get nfqws_feed || return 1
+    repo_add nfqws-keenetic "$SOURCE_URL" || return 1
     install_pkg nfqws-keenetic || return 1
     [ -f /opt/etc/nfqws/nfqws.conf ] ||
         { err 'Не найден ожидаемый /opt/etc/nfqws/nfqws.conf'; return 1; }
@@ -276,7 +386,8 @@ install_nfqws2() {
         return 1
     fi
     ensure_ssl_wget || return 1
-    repo_add nfqws2-keenetic https://nfqws.github.io/nfqws2-keenetic/all || return 1
+    source_get nfqws2_feed || return 1
+    repo_add nfqws2-keenetic "$SOURCE_URL" || return 1
     install_pkg nfqws2-keenetic || return 1
     [ -f /opt/etc/nfqws2/nfqws2.conf ] ||
         { err 'Не найден ожидаемый /opt/etc/nfqws2/nfqws2.conf'; return 1; }
@@ -289,18 +400,46 @@ install_nfqws_web() {
         ask_yes 'Продолжить без nfqws?' yes || return 0
     fi
     ensure_ssl_wget || return 1
-    repo_add nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all || return 1
+    source_get nfqws_web_feed || return 1
+    repo_add nfqws-keenetic-web "$SOURCE_URL" || return 1
     install_pkg nfqws-keenetic-web || return 1
     [ -f /opt/etc/nfqws_web.conf ] ||
         { err 'Не найден ожидаемый /opt/etc/nfqws_web.conf'; return 1; }
     say 'nfqws-web установлен. Интерфейс обычно доступен на порту 90.'
 }
+# Launch the original upstream menu without copying its strategy implementation.
+# Updates of that menu remain the responsibility of its own author.
+launch_nfqws_menu() {
+    nm_target=/opt/nfqws-menu.sh
+    if [ -f "$nm_target" ]; then
+        [ -s "$nm_target" ] && sh -n "$nm_target" ||
+            { err 'Существующий /opt/nfqws-menu.sh повреждён. Не перезаписываю.'; return 1; }
+        say 'Запуск уже установленного nfqws-menu.'
+    else
+        ask_yes 'Установить оригинальный nfqws-menu автора rndnaame?' yes || return 0
+        ensure_mktemp || return 1
+        nm_temp=$(mktemp /opt/.nfqws-menu.XXXXXX) || return 1
+        if ! source_download nfqws_menu "$nm_temp" || ! sh -n "$nm_temp"; then
+            rm -f "$nm_temp"
+            err 'Скрипт nfqws-menu не скачан или не прошёл проверку синтаксиса.'
+            return 1
+        fi
+        if ! chmod 755 "$nm_temp" || ! mv "$nm_temp" "$nm_target"; then
+            rm -f "$nm_temp"
+            err 'Не удалось сохранить nfqws-menu.'
+            return 1
+        fi
+    fi
+    # The upstream menu handles its own updates, strategies and backups.
+    sh "$nm_target"
+}
+
 install_keenkit() {
     if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
         say 'KeenKit уже установлен.'
         return 0
     fi
-    fetch_and_run https://raw.githubusercontent.com/spatiumstas/KeenKit/main/install.sh KeenKit || return 1
+    fetch_and_run keenkit KeenKit || return 1
     if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
         say 'KeenKit установлен в /opt/keenkit.sh и /opt/bin/keenkit.'
     else
@@ -322,7 +461,7 @@ install_hydra() {
     fi
     say 'Требуется KeeneticOS новее 4.3.6 и компонент Xtables-addons для Netfilter.'
     ask_yes 'Вы проверили требования HydraRoute Neo?' yes || return 0
-    fetch_and_run https://git.zerrolabs.org/Ground-Zerro/release/pages/keenetic/install-neo.sh HydraRoute-Neo || return 1
+    fetch_and_run hydra HydraRoute-Neo || return 1
     if pkg_installed hrneo && pkg_installed hrweb &&
        [ -f /opt/etc/HydraRoute/hrneo.conf ] && have hrneo; then
         say 'HydraRoute Neo и HRweb установлены (интерфейс: порт 2000).'
@@ -336,7 +475,7 @@ install_awg() {
     if pkg_installed awg-manager; then say 'AWG Manager уже установлен.'; return 0; fi
     say 'Требуется компонент WireGuard в KeeneticOS.'
     ask_yes 'Компонент WireGuard установлен?' yes || return 0
-    fetch_and_run https://raw.githubusercontent.com/hoaxisr/awg-manager/develop/scripts/install.sh AWG-Manager || return 1
+    fetch_and_run awg AWG-Manager || return 1
     pkg_installed awg-manager ||
         { err 'Пакет awg-manager не найден после установки (или установка отменена).'; return 1; }
     [ -d /opt/etc/awg-manager ] ||
@@ -601,7 +740,7 @@ install_watchdog() {
     fi
     torr_service || { err 'Служба TorrServer не найдена.'; return 1; }
     # The standalone installer installs missing dependencies, including Cron.
-    fetch_and_run "$BASE_URL/torr_watchdog" TorrServer-watchdog || return 1
+    fetch_and_run torr_watchdog TorrServer-watchdog || return 1
     # Independent post-check after the external installer exits.
     watchdog_complete ||
         { err 'После установки не проверены исполняемый watchdog и обе задачи Cron.'; return 1; }
@@ -626,7 +765,7 @@ update_torrserver() {
     torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
     [ "$(uname -m)" = aarch64 ] ||
         { err 'Обновлятор TorrServer поддерживает только aarch64.'; return 1; }
-    fetch_and_run "$BASE_URL/torrserver" TorrServer-updater || return 1
+    fetch_and_run torrserver TorrServer-updater || return 1
     [ -x /opt/sbin/torrserver ] && torr_service ||
         { err 'Не удалось проверить TorrServer после обновления.'; return 1; }
     say 'TorrServer: проверка бинарника и службы после обновления выполнена.'
@@ -685,6 +824,10 @@ show_packages() {
             count=$((count + 1))
         fi
     done
+    if [ -s /opt/nfqws-menu.sh ]; then
+        say '  nfqws-menu (скрипт)'
+        count=$((count + 1))
+    fi
     if [ -x /opt/bin/keenkit ] && [ -f /opt/keenkit.sh ]; then
         say '  KeenKit (скрипт)'
         count=$((count + 1))
@@ -711,10 +854,11 @@ menu() {
     say '  1. nfqws'
     say '  2. nfqws2'
     say '  3. nfqws-web'
-    say '  4. KeenKit'
-    say '  5. HydraRoute Neo'
-    say '  6. AWG Manager'
-    say '  7. TorrServer'
+    say '  4. nfqws-menu'
+    say '  5. KeenKit'
+    say '  6. HydraRoute Neo'
+    say '  7. AWG Manager'
+    say '  8. TorrServer'
     say ''
     say ' 88. Обновить KeenUtils'
     say ' 99. Установленные приложения Entware'
@@ -729,10 +873,11 @@ while :; do
         1|01) install_nfqws ;;
         2|02) install_nfqws2 ;;
         3|03) install_nfqws_web ;;
-        4|04) install_keenkit ;;
-        5|05) install_hydra ;;
-        6|06) install_awg ;;
-        7|07) torrserver_menu; continue ;;
+        4|04) launch_nfqws_menu ;;
+        5|05) install_keenkit ;;
+        6|06) install_hydra ;;
+        7|07) install_awg ;;
+        8|08) torrserver_menu; continue ;;
         88) update_keenutils
             if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
                 say 'Нажмите Enter, чтобы открыть обновлённое меню.'
