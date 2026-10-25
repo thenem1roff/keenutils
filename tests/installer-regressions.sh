@@ -40,12 +40,11 @@ grep -Fq 'Установлен nfqws2.' /tmp/keenutils-pkg-detection.log
 ! grep -Fq 'Продолжить установку nfqws?' /tmp/keenutils-pkg-detection.log
 
 # WireGuard prompt defaults to YES and downloader prompt speaks only English Y/n.
-printf '6\n\nn\n\n00\n' |
+printf '7\n\nn\n\n00\n' |
     script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-confirm.log
 grep -Fq 'Компонент WireGuard установлен? [Y/n]' /tmp/keenutils-confirm.log
-grep -Fq 'Запустить официальный внешний установщик AWG-Manager? [Y/n]' /tmp/keenutils-confirm.log
-grep -Fq 'ca-certificates: уже установлен.' /tmp/keenutils-confirm.log
-! grep -Fq 'ca-certificates отсутствует после установки' /tmp/keenutils-confirm.log
+grep -Fq 'Скачать и запустить официальный установщик AWG-Manager? [Y/n]' /tmp/keenutils-confirm.log
+! grep -Fq 'Установка зависимости/пакета:' /tmp/keenutils-confirm.log
 
 # Detect nfqws2 before warning in nfqws-web branch; prevent source modification.
 sudo mkdir -p /opt/etc/opkg
