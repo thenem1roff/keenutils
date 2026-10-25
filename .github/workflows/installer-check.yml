@@ -5,6 +5,7 @@ on:
       - install
       - torr_watchdog
       - torrserver
+      - tests/installer-regressions.sh
       - .github/workflows/installer-check.yml
   pull_request:
     paths:
@@ -103,3 +104,6 @@ jobs:
           repaired="$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
           sudo sh ./torr_watchdog | grep -q 'уже установлен'
           test "$repaired" = "$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
+
+      - name: Entware status and confirmation regression tests
+        run: sh tests/installer-regressions.sh
