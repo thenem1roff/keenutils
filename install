@@ -309,25 +309,27 @@ source_get() {
     [ -n "$SOURCE_URL" ] || return 1
 }
 # Download an upstream script only to a temporary file; never pipe it into sh.
+source_download_once() {
+    src_attempt_url=$1
+    src_attempt_dest=$2
+    if have wget && wget -q -O "$src_attempt_dest" "$src_attempt_url" &&
+        [ -s "$src_attempt_dest" ]; then
+        return 0
+    fi
+    if have curl && curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 \
+        -o "$src_attempt_dest" "$src_attempt_url" && [ -s "$src_attempt_dest" ]; then
+        return 0
+    fi
+    return 1
+}
 source_download() {
     source_get "$1" || return 1
     src_destination=$2
     say "Источник: $SOURCE_URL"
-    if have curl; then
-        curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 \
-            -o "$src_destination" "$SOURCE_URL" && [ -s "$src_destination" ] && return 0
-        if [ -n "$SOURCE_MIRROR" ]; then
-            say "Резервный официальный адрес: $SOURCE_MIRROR"
-            curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 \
-                -o "$src_destination" "$SOURCE_MIRROR" && [ -s "$src_destination" ] && return 0
-        fi
-    elif have wget; then
-        wget -q -O "$src_destination" "$SOURCE_URL" && [ -s "$src_destination" ] && return 0
-        if [ -n "$SOURCE_MIRROR" ]; then
-            say "Резервный официальный адрес: $SOURCE_MIRROR"
-            wget -q -O "$src_destination" "$SOURCE_MIRROR" &&
-                [ -s "$src_destination" ] && return 0
-        fi
+    source_download_once "$SOURCE_URL" "$src_destination" && return 0
+    if [ -n "$SOURCE_MIRROR" ]; then
+        say "Резервный официальный адрес: $SOURCE_MIRROR"
+        source_download_once "$SOURCE_MIRROR" "$src_destination" && return 0
     fi
     err 'Ни один проверенный источник установщика не ответил.'
     return 1
