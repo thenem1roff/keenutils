@@ -35,6 +35,11 @@ if [ "$(id -u)" != "0" ]; then
     err 'Запустите установщик с правами root в Entware.'
     exit 1
 fi
+if ! have grep; then
+    say 'Установка недостающего grep для проверки пакетов...'
+    opkg update && opkg install grep && have grep ||
+        { err 'Не удалось установить grep.'; exit 1; }
+fi
 
 pause_menu() {
     printf '\nНажмите Enter для возврата в меню... '
@@ -321,7 +326,7 @@ configure_torr_cache() {
 watchdog_complete() {
     [ -x /opt/bin/torr_watchdog.sh ] &&
     sh -n /opt/bin/torr_watchdog.sh >/dev/null 2>&1 &&
-    [ -f /opt/etc/crontab ] &&
+    [ -f /opt/etc/crontab ] && have grep &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab &&
     grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab ||
         return 1
