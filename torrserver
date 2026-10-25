@@ -50,8 +50,11 @@ if ! have grep; then
     opkg install grep || fail 'Не удалось установить grep'
     have grep || fail 'grep недоступен после установки'
 fi
+# Entware can mark explicitly installed packages as "install user installed".
+# Use opkg's installed list instead of assuming a single Status flag.
 pkg_installed() {
-    opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+    opkg list-installed "$1" 2>/dev/null |
+        awk -v name="$1" '$1 == name && $2 == "-" { found=1; exit } END { exit !found }'
 }
 ensure_package() {
     package=$1
