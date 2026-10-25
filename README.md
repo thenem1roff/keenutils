@@ -40,3 +40,17 @@ sh /tmp/keenutils-install.sh
 - `torr_watchdog`: перед выполнением проверяет существующий watchdog, обе строки Cron, синтаксис и доступность команд. Если всё готово — выходит без изменений. Иначе через `opkg` ставит только недостающие зависимости (включая `curl`, `procps-ng-pgrep`, `psmisc`, `cron` при отсутствии), дополняет Cron без дублирования, не перезаписывает существующий файл watchdog и затем повторяет проверки.
 - `torrserver`: перед обновлением проверяет команды и автоматически устанавливает отсутствующие зависимости Entware. Установленный бинарник и служба обязательны; скрипт не изменяет расписание Cron или watchdog.
 - В обоих сценариях `opkg update` вызывается только когда требуется установить пакет. Общего `opkg upgrade` нет. Проверки на реальном роутере пока не выполнялись.
+
+## Сторонние проекты
+
+KeenUtils — независимый проект, не связанный с авторами перечисленных программ. Все права на сторонние программы принадлежат их правообладателям. Установка выполняется из официальных источников. Условия использования определяются лицензиями соответствующих проектов.
+
+- [nfqws](https://github.com/nfqws/nfqws-keenetic) — MIT.
+- [nfqws2](https://github.com/nfqws/nfqws2-keenetic) — MIT.
+- [nfqws-web](https://github.com/nfqws/nfqws-keenetic-web) — MIT.
+- [KeenKit](https://github.com/spatiumstas/KeenKit) — All Rights Reserved.
+- [HydraRoute Neo](https://github.com/Ground-Zerro/HydraRoute/tree/main/Neo) — MIT (репозиторий HydraRoute).
+- [AWG Manager](https://github.com/hoaxisr/awg-manager) — MIT.
+- [TorrServer](https://github.com/YouROK/TorrServer) — GPL-3.0.
+
+KeenUtils не является официальным установщиком перечисленных проектов. Ссылки ведут на их исходные репозитории; авторство и лицензии следует проверять в соответствующих проектах.
