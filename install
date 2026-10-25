@@ -190,8 +190,10 @@ install_hydra() {
     say 'Требуется KeeneticOS новее 4.3.6 и компонент Xtables-addons для Netfilter.'
     ask_yes 'Вы проверили требования HydraRoute Neo?' no || return 0
     fetch_and_run https://git.zerrolabs.org/Ground-Zerro/release/pages/keenetic/install-neo.sh HydraRoute-Neo || return 1
-    if pkg_installed hrneo && pkg_installed hrweb; then
+    if pkg_installed hrneo && pkg_installed hrweb &&
+       [ -f /opt/etc/HydraRoute/hrneo.conf ] && have hrneo; then
         say 'HydraRoute Neo и HRweb установлены (интерфейс: порт 2000).'
+        say 'Конфиг: /opt/etc/HydraRoute/hrneo.conf'
     else
         err 'Не обнаружены оба ожидаемых пакета hrneo и hrweb.'
         return 1
