@@ -358,33 +358,64 @@ install_watchdog() {
         { err 'После установки не проверены исполняемый watchdog и обе задачи Cron.'; return 1; }
     say 'Watchdog проверен: файл, синтаксис, обе задачи Cron.'
 }
+# Install only TorrServer via opkg. Other actions live in the submenu.
 install_torrserver() {
     if torr_present; then
-        say 'TorrServer уже установлен.'
+        say 'TorrServer уже установлен; повторная установка не требуется.'
     else
         install_pkg torrserver || return 1
     fi
     [ -x /opt/sbin/torrserver ] ||
         { err 'Нет исполняемого /opt/sbin/torrserver.'; return 1; }
+    torr_service || { err 'Не найден исполняемый init-скрипт TorrServer.'; return 1; }
+    say 'TorrServer установлен: бинарник и служба проверены.'
+}
+
+update_torrserver() {
+    [ -x /opt/sbin/torrserver ] ||
+        { err 'TorrServer не установлен. Сначала выберите пункт 1.'; return 1; }
     torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
-    say 'TorrServer: бинарник и служба обнаружены.'
-    if [ "$(uname -m)" = aarch64 ]; then
-        if ask_yes 'Проверить и при необходимости обновить TorrServer с GitHub?' yes; then
-            fetch_and_run "$BASE_URL/torrserver" TorrServer-updater ||
-                err 'Обновление TorrServer не удалось; проверьте версию и API.'
-        fi
-    else
-        say 'Обновлятор keenutils/torrserver поддерживает только aarch64. Пропуск.'
-    fi
-    if ask_yes 'Настроить кеш на накопителе Entware?' yes; then
-        configure_torr_cache || err 'Кеш не изменён.'
-    fi
-    if watchdog_complete; then
-        say 'Watchdog уже установлен и проверен, повторная установка не нужна.'
-    elif ask_yes 'Установить или восстановить TorrServer watchdog?' yes; then
-        install_watchdog || err 'Watchdog не установлен или проверка не пройдена.'
-    fi
-    say 'Этап настройки TorrServer завершён.'
+    [ "$(uname -m)" = aarch64 ] ||
+        { err 'Обновлятор TorrServer поддерживает только aarch64.'; return 1; }
+    fetch_and_run "$BASE_URL/torrserver" TorrServer-updater || return 1
+    [ -x /opt/sbin/torrserver ] && torr_service ||
+        { err 'Не удалось проверить TorrServer после обновления.'; return 1; }
+    say 'TorrServer: проверка бинарника и службы после обновления выполнена.'
+}
+
+setup_torr_cache() {
+    [ -x /opt/sbin/torrserver ] ||
+        { err 'TorrServer не установлен. Сначала выберите пункт 1.'; return 1; }
+    torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
+    configure_torr_cache
+}
+
+# Nested menu: each operation is independent. 0 returns directly to main.
+torrserver_menu() {
+    while :; do
+        printf '\\033[2J\\033[H'
+        say '============================================='
+        say '         TorrServer | Управление'
+        say '============================================='
+        say '  1. Установить TorrServer'
+        say '  2. Обновить TorrServer'
+        say '  3. Установить / проверить watchdog'
+        say '  4. Настроить кеш TorrServer'
+        say ''
+        say '  0. Назад в главное меню'
+        say '---------------------------------------------'
+        printf 'Выберите действие: '
+        IFS= read -r torr_choice || return 0
+        case "$torr_choice" in
+            1|01) install_torrserver ;;
+            2|02) update_torrserver ;;
+            3|03) install_watchdog ;;
+            4|04) setup_torr_cache ;;
+            0|00) return 0 ;;
+            *) say 'Неизвестный пункт меню.' ;;
+        esac
+        pause_menu
+    done
 }
 show_packages() {
     say 'Установленные пакеты Entware:'
@@ -419,7 +450,7 @@ while :; do
         4|04) install_keenkit ;;
         5|05) install_hydra ;;
         6|06) install_awg ;;
-        7|07) install_torrserver ;;
+        7|07) torrserver_menu; continue ;;
         99) show_packages ;;
         00|0) say 'Выход.'; break ;;
         *) say 'Неизвестный пункт меню.' ;;
