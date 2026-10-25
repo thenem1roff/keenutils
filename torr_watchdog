@@ -23,8 +23,18 @@ watchdog_complete() {
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' "$CRONTAB" &&
     grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' "$CRONTAB"
 }
-if watchdog_complete; then
-    printf 'TorrServer watchdog уже установлен: файл и обе задачи Cron проверены. Изменений нет.\n'
+runtime_ready() {
+    for required in curl pgrep killall awk wc tail sync mkdir rm rmdir \
+        ls head cat sleep date; do
+        have "$required" || return 1
+    done
+    for init in /opt/etc/init.d/S*cron*; do
+        [ -x "$init" ] && return 0
+    done
+    return 1
+}
+if watchdog_complete && runtime_ready; then
+    printf 'TorrServer watchdog уже установлен: файл, зависимости и обе задачи Cron проверены. Изменений нет.\n'
     exit 0
 fi
 
@@ -77,6 +87,12 @@ ensure_command head coreutils-head
 ensure_command cat coreutils-cat
 ensure_command sleep coreutils-sleep
 ensure_command date coreutils-date
+
+# Repair missing runtime dependencies without altering a working watchdog.
+if watchdog_complete && runtime_ready; then
+    printf 'Watchdog и Cron не изменялись; недостающие зависимости проверены.\n'
+    exit 0
+fi
 
 # Existing files are retained. Repair only missing Cron entries if the watchdog
 # file is present; never overwrite a pre-existing custom watchdog.
@@ -301,8 +317,8 @@ if [ "$CRON_CHANGED" -eq 1 ]; then
 fi
 
 # POST-INSTALL CHECK: file, execution mode, syntax and BOTH precise schedules.
-watchdog_complete ||
-    fail 'Проверка после установки не пройдена: проверьте watchdog и Cron'
+watchdog_complete && runtime_ready ||
+    fail 'Проверка после установки не пройдена: watchdog, Cron или зависимости'
 printf 'Проверка успешна: %s, права, синтаксис и обе записи Cron.\n' "$WATCHDOG"
 printf 'Watchdog установлен. Проверки каждые 30 секунд.\n'
 printf 'Журнал заполняется только при сбоях и восстановлении.\n'
