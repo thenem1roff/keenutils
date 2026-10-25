@@ -323,7 +323,16 @@ watchdog_complete() {
     sh -n /opt/bin/torr_watchdog.sh >/dev/null 2>&1 &&
     [ -f /opt/etc/crontab ] &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab &&
-    grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab
+    grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab ||
+        return 1
+    for required in curl pgrep killall awk wc tail sync mkdir rm rmdir \
+        ls head cat sleep date; do
+        have "$required" || return 1
+    done
+    for init in /opt/etc/init.d/S*cron*; do
+        [ -x "$init" ] && return 0
+    done
+    return 1
 }
 install_watchdog() {
     # Independent pre-check: a complete installation is never run again.
