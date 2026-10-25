@@ -8,11 +8,18 @@ umask 077
 BASE_URL="https://raw.githubusercontent.com/thenem1roff/keenutils/main"
 INDEX_READY=0
 TMP_FILES=""
+TORR_AUTHFILE=''
+TORR_RESPONSE_FILE=''
+TORR_TERMINAL_ECHO_OFF=0
 
 clean_up() {
     for item in $TMP_FILES; do
         [ -f "$item" ] && rm -f "$item"
     done
+    # Restore terminal echo on Ctrl-C during password entry.
+    if [ "$TORR_TERMINAL_ECHO_OFF" = 1 ]; then stty echo </dev/tty 2>/dev/null || :; fi
+    [ -z "$TORR_AUTHFILE" ] || rm -f "$TORR_AUTHFILE"
+    [ -z "$TORR_RESPONSE_FILE" ] || rm -f "$TORR_RESPONSE_FILE"
 }
 trap clean_up EXIT
 trap 'exit 130' INT
@@ -346,99 +353,224 @@ torr_service() {
     done
     [ -n "$TORR_INIT" ]
 }
-# Find the mount that contains /opt. Never guess a different USB drive.
+# Find the actual USB volume hosting Entware. /opt may be a symlink or bind mount.
+filesystem_id() {
+    fs_real=$1
+    if have readlink; then
+        fs_real=$(readlink -f "$1" 2>/dev/null) || fs_real=$1
+    fi
+    if have stat; then
+        fs_value=$(stat -c %d "$fs_real" 2>/dev/null)
+        if [ -n "$fs_value" ]; then
+            printf 'dev:%s\n' "$fs_value"
+            return 0
+        fi
+    fi
+    fs_value=$(df -P "$fs_real" 2>/dev/null | awk 'NR == 2 {print $1}')
+    [ -n "$fs_value" ] || return 1
+    printf 'source:%s\n' "$fs_value"
+}
+is_mounted_disk() {
+    [ -d "$1" ] && [ -r /proc/mounts ] &&
+        awk -v p="$1" '$2 == p {found=1} END {exit !found}' /proc/mounts
+}
+verify_entware_disk() {
+    check_disk=$1
+    case "$check_disk" in /tmp/mnt/*) ;; *) return 1 ;; esac
+    volname=$(printf '%s\n' "$check_disk" | cut -d / -f4)
+    [ "$check_disk" = "/tmp/mnt/$volname" ] || return 1
+    is_mounted_disk "$check_disk" || return 1
+    disk_id=$(filesystem_id "$check_disk") || return 1
+    [ "$disk_id" = "$OPT_FS_ID" ] && [ -w "$check_disk" ]
+}
 find_entware_disk() {
     DISK_ROOT=''
-    have stat || { err 'Отсутствует stat для сверки файловой системы.'; return 1; }
-    opt_id=$(stat -L -c %d /opt 2>/dev/null) || return 1
-    [ -n "$opt_id" ] || return 1
-    # Keenetic normally mounts disks under /tmp/mnt/<volume-id>.
-    for candidate in $(awk '$2 ~ /^\/tmp\/mnt\/[^\/]+$/ {print $2}' /proc/mounts); do
-        [ -d "$candidate" ] || continue
-        id=$(stat -L -c %d "$candidate" 2>/dev/null) || continue
-        [ "$id" = "$opt_id" ] || continue
-        if [ -n "$DISK_ROOT" ] && [ "$DISK_ROOT" != "$candidate" ]; then
-            err 'Несколько накопителей подходят под /opt; автоподбор отменён.'
-            return 1
-        fi
-        DISK_ROOT=$candidate
-    done
-    # For symlinked /opt, /proc/mounts may omit the matched mount.
-    if [ -z "$DISK_ROOT" ] && have readlink; then
-        resolved=$(readlink -f /opt 2>/dev/null) || resolved=''
-        case "$resolved" in
+    OPT_FS_ID=$(filesystem_id /opt) ||
+        { err 'Не удалось определить файловую систему /opt.'; return 1; }
+    say "Файловая система Entware: $OPT_FS_ID"
+    if have readlink; then
+        real_opt=$(readlink -f /opt 2>/dev/null) || real_opt=''
+        case "$real_opt" in
             /tmp/mnt/*)
-                volume=$(printf '%s\n' "$resolved" | cut -d / -f4)
+                volume=$(printf '%s\n' "$real_opt" | cut -d / -f4)
                 candidate="/tmp/mnt/$volume"
-                if [ -d "$candidate" ] &&
-                   [ "$(stat -L -c %d "$candidate" 2>/dev/null)" = "$opt_id" ]; then
-                    DISK_ROOT=$candidate
-                fi
+                if verify_entware_disk "$candidate"; then DISK_ROOT=$candidate; fi
                 ;;
         esac
     fi
-    case "$DISK_ROOT" in
-        /tmp/mnt/*) return 0 ;;
-        *) err 'Не удалось однозначно определить накопитель Entware. Кеш не меняю.'; return 1 ;;
-    esac
-}
-get_torr_settings() {
-    curl -fsS --connect-timeout 3 --max-time 10 \
-        -H 'Content-Type: application/json' \
-        -d '{"action":"get"}' http://127.0.0.1:8090/settings
-}
-set_torr_settings() {
-    sets=$1
-    request=$(printf '%s' "$sets" | jq -c '{action:"set",sets:.}') || return 1
-    curl -fsS --connect-timeout 3 --max-time 15 -o /dev/null \
-        -H 'Content-Type: application/json' -d "$request" \
-        http://127.0.0.1:8090/settings
-}
-configure_torr_cache() {
-    ensure_curl && ensure_jq || return 1
-    find_entware_disk || return 1
-    CACHE_DIR="$DISK_ROOT/tscashe"
-    say "Накопитель Entware: $DISK_ROOT"
-    say "Предлагаемый кеш:   $CACHE_DIR"
-    [ -w "$DISK_ROOT" ] || { err 'Накопитель недоступен для записи.'; return 1; }
-    existing=$(get_torr_settings) ||
-        { err 'API TorrServer недоступен или требует авторизацию. Настройки не меняю.'; return 1; }
-    printf '%s' "$existing" | jq -e 'type=="object" and has("UseDisk") and has("TorrentsSavePath")' >/dev/null ||
-        { err 'Неожиданный формат настроек API.'; return 1; }
-    previous=$(printf '%s' "$existing" | jq -r '.TorrentsSavePath')
-    usedisk=$(printf '%s' "$existing" | jq -r '.UseDisk')
-    say "Текущий путь: $previous (UseDisk=$usedisk)"
-    if [ "$previous" = "$CACHE_DIR" ] && [ "$usedisk" = true ]; then
-        say 'Путь кеша уже настроен. Изменения не нужны.'
+    if [ -z "$DISK_ROOT" ]; then
+        for candidate in /tmp/mnt/*; do
+            verify_entware_disk "$candidate" || continue
+            if [ -n "$DISK_ROOT" ] && [ "$DISK_ROOT" != "$candidate" ]; then
+                err 'Обнаружено несколько томов с файловой системой /opt.'
+                DISK_ROOT=''
+                break
+            fi
+            DISK_ROOT=$candidate
+        done
+    fi
+    if [ -n "$DISK_ROOT" ]; then
+        say "Накопитель Entware: $DISK_ROOT"
         return 0
     fi
-    ask_yes 'Изменить настройки кеша TorrServer?' yes || return 0
+    err 'Автоматически определить накопитель не удалось.'
+    say 'Диагностика:'
+    df -h /opt 2>&1 || :
+    say 'Доступные монтирования /tmp/mnt:'
+    awk '$2 ~ /^\/tmp\/mnt\/[^\/]+$/ {print "  " $2 " (" $1 ")"}' /proc/mounts
+    printf 'Введите путь /tmp/mnt/<том> (Enter — отмена): '
+    IFS= read -r candidate || return 1
+    [ -n "$candidate" ] || return 1
+    if verify_entware_disk "$candidate"; then
+        DISK_ROOT=$candidate
+        return 0
+    fi
+    err 'Указанный путь не является проверенным накопителем Entware.'
+    return 1
+}
+
+# POST /settings supports HTTP Basic Auth and may take longer than 15 s
+# because a settings change reconnects torrent sessions. No service stop needed.
+TORR_API_URL='http://127.0.0.1:8090/settings'
+TORR_AUTHFILE=''
+TORR_RESPONSE_FILE=''
+TORR_HTTP_STATUS=''
+TORR_CURRENT_SETTINGS=''
+TORR_TERMINAL_ECHO_OFF=0
+
+torr_api_cleanup() {
+    [ -z "$TORR_AUTHFILE" ] || rm -f "$TORR_AUTHFILE"
+    [ -z "$TORR_RESPONSE_FILE" ] || rm -f "$TORR_RESPONSE_FILE"
+    TORR_AUTHFILE=''
+    TORR_RESPONSE_FILE=''
+}
+torr_api_call() {
+    api_json=$1
+    TORR_HTTP_STATUS=''
+    if [ -n "$TORR_AUTHFILE" ]; then
+        TORR_HTTP_STATUS=$(curl -sS -K "$TORR_AUTHFILE" -o "$TORR_RESPONSE_FILE" \
+            -w '%{http_code}' --connect-timeout 5 --max-time 90 \
+            -H 'Content-Type: application/json' \
+            -d "$api_json" "$TORR_API_URL") ||
+            { err 'API TorrServer недоступен.'; return 1; }
+    else
+        TORR_HTTP_STATUS=$(curl -sS -o "$TORR_RESPONSE_FILE" \
+            -w '%{http_code}' --connect-timeout 5 --max-time 90 \
+            -H 'Content-Type: application/json' \
+            -d "$api_json" "$TORR_API_URL") ||
+            { err 'API TorrServer недоступен.'; return 1; }
+    fi
+    [ "$TORR_HTTP_STATUS" = 200 ] ||
+        { err "API TorrServer: HTTP $TORR_HTTP_STATUS"; return 1; }
+}
+get_torr_settings() {
+    torr_api_call '{"action":"get"}' || return 1
+    TORR_CURRENT_SETTINGS=$(cat "$TORR_RESPONSE_FILE") || return 1
+    printf '%s' "$TORR_CURRENT_SETTINGS" |
+        jq -e 'type=="object" and has("UseDisk") and
+               has("TorrentsSavePath") and
+               (.UseDisk|type=="boolean") and
+               (.TorrentsSavePath|type=="string")' >/dev/null ||
+        { err 'API не вернул поля UseDisk/TorrentsSavePath.'; return 1; }
+}
+set_torr_settings() {
+    req=$(printf '%s' "$1" | jq -c '{action:"set",sets:.}') || return 1
+    torr_api_call "$req"
+}
+prompt_torr_auth() {
+    ask_yes 'TorrServer требует HTTP-авторизацию. Ввести данные?' yes || return 1
+    printf 'Логин: '
+    IFS= read -r auth_user || return 1
+    [ -n "$auth_user" ] || { err 'Пустой логин.'; return 1; }
+    have stty || { err 'stty не найден, пароль не запрашиваю.'; return 1; }
+    printf 'Пароль: '
+    stty -echo </dev/tty || return 1
+    TORR_TERMINAL_ECHO_OFF=1
+    IFS= read -r auth_pass
+    auth_status=$?
+    stty echo </dev/tty || :
+    TORR_TERMINAL_ECHO_OFF=0
+    printf '\n'
+    [ "$auth_status" -eq 0 ] || return 1
+    TORR_AUTHFILE=$(mktemp /tmp/.keenutils-auth.XXXXXX) || return 1
+    chmod 600 "$TORR_AUTHFILE" || return 1
+    auth_line=$(jq -cn --arg cred "$auth_user:$auth_pass" '$cred') || return 1
+    unset auth_pass auth_user
+    printf 'user = %s\n' "$auth_line" > "$TORR_AUTHFILE"
+}
+configure_torr_cache_inner() {
+    if ! get_torr_settings; then
+        if [ "$TORR_HTTP_STATUS" = 401 ]; then
+            prompt_torr_auth || return 1
+            get_torr_settings || { err 'Не удалось войти в API TorrServer.'; return 1; }
+        else
+            err 'Невозможно прочитать настройки через API. Ничего не меняю.'
+            return 1
+        fi
+    fi
+    existing=$TORR_CURRENT_SETTINGS
+    old_path=$(printf '%s' "$existing" | jq -r '.TorrentsSavePath') || return 1
+    old_disk=$(printf '%s' "$existing" | jq -r '.UseDisk') || return 1
+    say "Сейчас: $old_path (UseDisk=$old_disk)"
+    find_entware_disk || return 1
+    CACHE_DIR="$DISK_ROOT/tscashe"
+    say "Предлагается: $CACHE_DIR"
+    if [ "$old_path" = "$CACHE_DIR" ] && [ "$old_disk" = true ]; then
+        say 'Кеш уже настроен по этому пути. Изменений не требуется.'
+        return 0
+    fi
+    say 'При сохранении TorrServer переподключает торрент-сессии.'
+    ask_yes 'Изменить настройки дискового кеша?' yes || return 0
     mkdir -p "$CACHE_DIR" || return 1
     probe="$CACHE_DIR/.keenutils-check.$$"
-    : > "$probe" || { err 'Нельзя записать в каталог кеша.'; return 1; }
+    if ! ( : > "$probe" ); then
+        err 'Каталог кеша недоступен для записи.'
+        return 1
+    fi
     rm -f "$probe"
     backup_dir=/opt/var/backups/keenutils
     mkdir -p "$backup_dir" || return 1
     backup=$(mktemp "$backup_dir/torr-settings.XXXXXX") || return 1
     chmod 600 "$backup" || return 1
     printf '%s\n' "$existing" > "$backup" || return 1
-    say "Резервная копия настроек API: $backup"
+    say "Резервная копия настроек: $backup"
     updated=$(printf '%s' "$existing" |
-        jq -c --arg p "$CACHE_DIR" '.TorrentsSavePath=$p | .UseDisk=true') || return 1
+        jq -c --arg p "$CACHE_DIR" '.TorrentsSavePath=$p | .UseDisk=true') ||
+        return 1
     if ! set_torr_settings "$updated"; then
-        err 'API не подтвердил изменение. Проверьте настройки вручную.'
+        err "Сохранение не подтверждено API. Копия: $backup"
         return 1
     fi
-    observed=$(get_torr_settings) || observed=''
-    actual=$(printf '%s' "$observed" | jq -r '.TorrentsSavePath // empty' 2>/dev/null)
-    flag=$(printf '%s' "$observed" | jq -r '.UseDisk // false' 2>/dev/null)
-    if [ "$actual" = "$CACHE_DIR" ] && [ "$flag" = true ]; then
-        say "Кеш TorrServer успешно настроен: $CACHE_DIR"
-        return 0
-    fi
-    err 'Проверка настроек не прошла; пробую восстановить сохранённые значения.'
-    set_torr_settings "$existing" || err "Не удалось восстановить настройки! Backup: $backup"
+    attempts=0
+    while [ "$attempts" -lt 3 ]; do
+        if get_torr_settings; then
+            new_path=$(printf '%s' "$TORR_CURRENT_SETTINGS" |
+                jq -r '.TorrentsSavePath') || return 1
+            new_disk=$(printf '%s' "$TORR_CURRENT_SETTINGS" |
+                jq -r '.UseDisk') || return 1
+            if [ "$new_path" = "$CACHE_DIR" ] && [ "$new_disk" = true ]; then
+                say "УСПЕХ: UseDisk=true, путь кеша: $new_path"
+                say 'Настройка подтверждена повторным чтением из TorrServer.'
+                return 0
+            fi
+        fi
+        attempts=$((attempts + 1))
+        sleep 2
+    done
+    err 'TorrServer не подтвердил новую настройку (возможен режим read-only).'
+    err "Прежний путь: $old_path; требуемый: $CACHE_DIR"
+    err "Резервная копия: $backup"
     return 1
+}
+configure_torr_cache() {
+    ensure_curl && ensure_jq || return 1
+    ensure_mktemp || return 1
+    TORR_AUTHFILE=''
+    TORR_RESPONSE_FILE=$(mktemp /tmp/.keenutils-settings.XXXXXX) || return 1
+    configure_torr_cache_inner
+    res=$?
+    torr_api_cleanup
+    return "$res"
 }
 watchdog_complete() {
     [ -x /opt/bin/torr_watchdog.sh ] &&
