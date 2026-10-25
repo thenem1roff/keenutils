@@ -17,10 +17,16 @@ curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/nfqws | 
 Запуск в shell Entware от root через SSH/Telnet:
 
 ```sh
-opkg update && opkg install ca-certificates curl
-curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/install -o /tmp/keenutils-install.sh
-sh /tmp/keenutils-install.sh
+wget -O /tmp/keenutils-install.sh https://raw.githubusercontent.com/thenem1roff/keenutils/main/install && sh /tmp/keenutils-install.sh
 ```
+
+Если установленный `wget` не поддерживает HTTPS, сначала установите его SSL-версию:
+
+```sh
+opkg update && opkg install ca-certificates wget-ssl
+```
+
+Затем повторите команду запуска. `curl` для первого запуска больше не требуется; установщик сам добавит его при необходимости для отдельных операций.
 
 Не запускайте интерактивное меню через `curl | sh`: скрипт должен читать ответы с терминала.
 
