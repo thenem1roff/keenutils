@@ -1,0 +1,17 @@
+name: Upstream installer link health
+on:
+  schedule:
+    - cron: '25 3 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - sources.conf
+      - tests/check-sources.py
+      - .github/workflows/sources-health.yml
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check official URLs without executing downloaded code
+        run: python3 tests/check-sources.py
