@@ -43,14 +43,10 @@ sh /tmp/keenutils-install.sh
 
 ## Сторонние проекты
 
-KeenUtils — независимый проект, не связанный с авторами перечисленных программ. Все права на сторонние программы принадлежат их правообладателям. Установка выполняется из официальных источников. Условия использования определяются лицензиями соответствующих проектов.
-
-- [nfqws](https://github.com/nfqws/nfqws-keenetic) — MIT.
-- [nfqws2](https://github.com/nfqws/nfqws2-keenetic) — MIT.
-- [nfqws-web](https://github.com/nfqws/nfqws-keenetic-web) — MIT.
-- [KeenKit](https://github.com/spatiumstas/KeenKit) — All Rights Reserved.
-- [HydraRoute Neo](https://github.com/Ground-Zerro/HydraRoute/tree/main/Neo) — MIT (репозиторий HydraRoute).
-- [AWG Manager](https://github.com/hoaxisr/awg-manager) — MIT.
-- [TorrServer](https://github.com/YouROK/TorrServer) — GPL-3.0.
-
-KeenUtils не является официальным установщиком перечисленных проектов. Ссылки ведут на их исходные репозитории; авторство и лицензии следует проверять в соответствующих проектах.
+- [nfqws](https://github.com/nfqws/nfqws-keenetic)
+- [nfqws2](https://github.com/nfqws/nfqws2-keenetic)
+- [nfqws-web](https://github.com/nfqws/nfqws-keenetic-web)
+- [KeenKit](https://github.com/spatiumstas/KeenKit)
+- [HydraRoute Neo](https://github.com/Ground-Zerro/HydraRoute/tree/main/Neo)
+- [AWG Manager](https://github.com/hoaxisr/awg-manager)
+- [TorrServer](https://github.com/YouROK/TorrServer)
