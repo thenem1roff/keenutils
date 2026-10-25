@@ -113,6 +113,10 @@ fetch_and_run() {
     ensure_curl || return 1
     say "Источник: $url"
     ask_yes "Запустить официальный внешний установщик $label?" no || { say "Действие отменено."; return 2; }
+    if ! have mktemp; then
+        install_pkg coreutils-mktemp && have mktemp ||
+            { err 'Не удалось установить mktemp.'; return 1; }
+    fi
     temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
     TMP_FILES="$TMP_FILES $temp"
     curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 -o "$temp" "$url" ||
@@ -316,31 +320,29 @@ configure_torr_cache() {
 }
 watchdog_complete() {
     [ -x /opt/bin/torr_watchdog.sh ] &&
+    sh -n /opt/bin/torr_watchdog.sh >/dev/null 2>&1 &&
     [ -f /opt/etc/crontab ] &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab &&
     grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab
 }
 install_watchdog() {
+    # Independent pre-check: a complete installation is never run again.
     if watchdog_complete; then
         say 'TorrServer watchdog уже установлен и прописан в Cron (00 и 30 сек).'
         return 0
     fi
-    if [ -f /opt/bin/torr_watchdog.sh ]; then
-        say 'Файл watchdog есть, но задача Cron не найдена.'
-        ask_yes 'Запустить установщик для восстановления Cron?' no || return 0
+    if [ -e /opt/bin/torr_watchdog.sh ]; then
+        say 'Watchdog найден, но проверка файла или Cron неполная.'
+    else
+        say 'Watchdog пока не установлен.'
     fi
     torr_service || { err 'Служба TorrServer не найдена.'; return 1; }
-    if [ ! -f /opt/etc/crontab ]; then
-        err 'Не найден /opt/etc/crontab. Сначала настройте Cron.'
-        return 1
-    fi
-    for cmd in pgrep killall awk wc tail sync; do
-        have "$cmd" || { err "Для watchdog нужна команда $cmd."; return 1; }
-    done
+    # The standalone installer installs missing dependencies, including Cron.
     fetch_and_run "$BASE_URL/torr_watchdog" TorrServer-watchdog || return 1
+    # Independent post-check after the external installer exits.
     watchdog_complete ||
-        { err 'Не найдены watchdog и/или обе записи Cron.'; return 1; }
-    say 'Watchdog проверен. Существующие задания не удалялись.'
+        { err 'После установки не проверены исполняемый watchdog и обе задачи Cron.'; return 1; }
+    say 'Watchdog проверен: файл, синтаксис, обе задачи Cron.'
 }
 install_torrserver() {
     if torr_present; then
@@ -363,8 +365,10 @@ install_torrserver() {
     if ask_yes 'Настроить кеш на накопителе Entware?' yes; then
         configure_torr_cache || err 'Кеш не изменён.'
     fi
-    if ask_yes 'Установить TorrServer watchdog?' yes; then
-        install_watchdog || err 'Watchdog не установлен.'
+    if watchdog_complete; then
+        say 'Watchdog уже установлен и проверен, повторная установка не нужна.'
+    elif ask_yes 'Установить или восстановить TorrServer watchdog?' yes; then
+        install_watchdog || err 'Watchdog не установлен или проверка не пройдена.'
     fi
     say 'Этап настройки TorrServer завершён.'
 }
