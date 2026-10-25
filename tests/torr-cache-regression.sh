@@ -16,6 +16,13 @@ ask_yes() { return 0; }
 
 MOCK_DISK=/tmp/mnt/keenutils-cache-test
 mkdir -p "$MOCK_DISK" /opt/var/backups/keenutils
+# Simulate /opt and USB root on the same device (CI is not a Keenetic).
+filesystem_id() {
+    case "$1" in
+        /opt|"$MOCK_DISK") printf 'dev:keenetic-mock\n' ;;
+        *) return 1 ;;
+    esac
+}
 is_mounted_disk() { [ "$1" = "$MOCK_DISK" ]; }
 find_entware_disk
 [ "$DISK_ROOT" = "$MOCK_DISK" ]
