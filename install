@@ -48,20 +48,26 @@ pause_menu() {
 ask_yes() {
     question=$1
     default=$2
-    if [ "$default" = yes ]; then
-        printf '%s [Д/н]: ' "$question"
-    else
-        printf '%s [д/Н]: ' "$question"
-    fi
-    IFS= read -r answer || return 1
-    case "$answer" in
-        '') [ "$default" = yes ] ;;
-        y|Y|yes|YES|д|Д|да|Да|ДА) return 0 ;;
-        *) return 1 ;;
-    esac
+    while :; do
+        if [ "$default" = yes ]; then
+            printf '%s [Y/n]: ' "$question"
+        else
+            printf '%s [y/N]: ' "$question"
+        fi
+        IFS= read -r answer || return 1
+        case "$answer" in
+            '') [ "$default" = yes ]; return $? ;;
+            y|Y|yes|YES|Yes) return 0 ;;
+            n|N|no|NO|No) return 1 ;;
+            *) say 'Введите y или n (Enter — ответ по умолчанию).' ;;
+        esac
+    done
 }
+# opkg status can be "install user installed" or "install ok installed".
+# Match the package name in the authoritative installed list instead.
 pkg_installed() {
-    opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+    opkg list-installed "$1" 2>/dev/null |
+        awk -v name="$1" '$1 == name && $2 == "-" { found=1; exit } END { exit !found }'
 }
 sync_index() {
     if [ "$INDEX_READY" -eq 0 ]; then
@@ -229,7 +235,7 @@ fetch_and_run() {
     label=$2
     ensure_curl || return 1
     say "Источник: $url"
-    ask_yes "Запустить официальный внешний установщик $label?" no || { say "Действие отменено."; return 2; }
+    ask_yes "Запустить официальный внешний установщик $label?" yes || { say "Действие отменено."; return 2; }
     if ! have mktemp; then
         install_pkg coreutils-mktemp && have mktemp ||
             { err 'Не удалось установить mktemp.'; return 1; }
@@ -248,8 +254,7 @@ install_nfqws() {
         err 'Установлен nfqws2. Эти пакеты конфликтуют. Автоудаление запрещено.'
         return 1
     fi
-    say 'Примечание: nfqws (v1) больше не развивается; рекомендуется nfqws2.'
-    ask_yes 'Продолжить установку nfqws?' no || return 0
+    ask_yes 'Продолжить установку nfqws?' yes || return 0
     ensure_ssl_wget || return 1
     repo_add nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all || return 1
     install_pkg nfqws-keenetic || return 1
@@ -274,7 +279,7 @@ install_nfqws_web() {
     if pkg_installed nfqws-keenetic-web; then say 'nfqws-web уже установлен.'; return 0; fi
     if ! pkg_installed nfqws-keenetic && ! pkg_installed nfqws2-keenetic; then
         say 'Внимание: сначала рекомендуется установить nfqws или nfqws2.'
-        ask_yes 'Продолжить без nfqws?' no || return 0
+        ask_yes 'Продолжить без nfqws?' yes || return 0
     fi
     ensure_ssl_wget || return 1
     repo_add nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all || return 1
@@ -309,7 +314,7 @@ install_hydra() {
         return 0
     fi
     say 'Требуется KeeneticOS новее 4.3.6 и компонент Xtables-addons для Netfilter.'
-    ask_yes 'Вы проверили требования HydraRoute Neo?' no || return 0
+    ask_yes 'Вы проверили требования HydraRoute Neo?' yes || return 0
     fetch_and_run https://git.zerrolabs.org/Ground-Zerro/release/pages/keenetic/install-neo.sh HydraRoute-Neo || return 1
     if pkg_installed hrneo && pkg_installed hrweb &&
        [ -f /opt/etc/HydraRoute/hrneo.conf ] && have hrneo; then
@@ -323,7 +328,7 @@ install_hydra() {
 install_awg() {
     if pkg_installed awg-manager; then say 'AWG Manager уже установлен.'; return 0; fi
     say 'Требуется компонент WireGuard в KeeneticOS.'
-    ask_yes 'Компонент WireGuard установлен?' no || return 0
+    ask_yes 'Компонент WireGuard установлен?' yes || return 0
     fetch_and_run https://raw.githubusercontent.com/hoaxisr/awg-manager/develop/scripts/install.sh AWG-Manager || return 1
     pkg_installed awg-manager ||
         { err 'Пакет awg-manager не найден после установки (или установка отменена).'; return 1; }
@@ -529,9 +534,41 @@ torrserver_menu() {
         pause_menu
     done
 }
+# Menu 99 lists user-facing apps rather than every opkg library or dependency.
+# opkg metadata does not reliably prove who initiated each historical install.
 show_packages() {
-    say 'Установленные пакеты Entware:'
-    opkg list-installed | sort
+    say 'Установленные приложения Entware (без системных библиотек):'
+    count=0
+    for app in \
+        nfqws-keenetic nfqws2-keenetic nfqws-keenetic-web \
+        hrneo hrweb awg-manager torrserver \
+        adguardhome-go smartdns sing-box xray xray-core \
+        tailscale zerotier transmission-daemon transmission-web \
+        aria2 minidlna samba4-server nginx openvpn-openssl \
+        mc htop tmux nano vim-full mosquitto iperf3 \
+        wireguard-tools qbittorrent-nox
+    do
+        if pkg_installed "$app"; then
+            say "  $app"
+            count=$((count + 1))
+        fi
+    done
+    if [ -x /opt/bin/keenkit ] && [ -f /opt/keenkit.sh ]; then
+        say '  KeenKit (скрипт)'
+        count=$((count + 1))
+    fi
+    if watchdog_complete; then
+        say '  TorrServer watchdog (скрипт)'
+        count=$((count + 1))
+    fi
+    if [ -x "$KEENUTILS_BIN" ]; then
+        say '  KeenUtils (скрипт)'
+        count=$((count + 1))
+    fi
+    [ "$count" -gt 0 ] || say '  Приложения из проверяемого списка не обнаружены.'
+    say ''
+    say 'Показаны известные приложения, а не все пакеты opkg.'
+    say 'Точно восстановить, кто устанавливал каждый пакет, по opkg нельзя.'
 }
 # EXTENSION POINT: add a menu line and one case branch calling install_*.
 menu() {
@@ -548,7 +585,7 @@ menu() {
     say '  7. TorrServer'
     say ''
     say ' 88. Обновить KeenUtils'
-    say ' 99. Все установленные пакеты Entware'
+    say ' 99. Установленные приложения Entware'
     say ' 00. Выход'
     say '---------------------------------------------'
     printf 'Выберите действие: '
