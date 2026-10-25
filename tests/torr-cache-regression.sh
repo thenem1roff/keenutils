@@ -30,6 +30,7 @@ find_entware_disk
 cat > /tmp/keenutils-cache-api.py <<'PY'
 import base64
 import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 db = "/tmp/keenutils-cache-state.json"
@@ -56,8 +57,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         elif req["action"] == "set":
-            with open(db, "w") as fh:
-                json.dump(req["sets"], fh)
+            # TorrServer can return HTTP 200 even in read-only DB mode.
+            if not os.path.exists("/tmp/keenutils-cache-readonly"):
+                with open(db, "w") as fh:
+                    json.dump(req["sets"], fh)
             self.send_response(200)
             self.end_headers()
     def log_message(self, fmt, *args):
@@ -89,4 +92,13 @@ test -d "$MOCK_DISK/tscashe"
 cp /tmp/keenutils-cache-state.json /tmp/keenutils-cache-before.json
 configure_torr_cache_inner
 cmp -s /tmp/keenutils-cache-before.json /tmp/keenutils-cache-state.json
+# HTTP 200 is NOT sufficient: read-only API must be detected as a failure.
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864}\n' > /tmp/keenutils-cache-state.json
+touch /tmp/keenutils-cache-readonly
+if configure_torr_cache_inner; then
+    echo 'Read-only TorrServer incorrectly reported cache configuration success' >&2
+    exit 1
+fi
+jq -e '.UseDisk == false and .TorrentsSavePath == ""' /tmp/keenutils-cache-state.json >/dev/null
+rm -f /tmp/keenutils-cache-readonly
 echo 'TorrServer API authentication, cache persistence, and disk checks passed.'
