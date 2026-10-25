@@ -12,6 +12,7 @@ say() { printf '%s\n' "$*"; }
 err() { printf '%s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 ensure_mktemp() { :; }
+BASE_URL=https://raw.githubusercontent.com/thenem1roff/keenutils/main
 SOURCES_CACHE=/opt/etc/keenutils/sources.conf
 SOURCES_READY=0
 mkdir -p /opt/etc/keenutils
