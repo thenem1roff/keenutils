@@ -6,6 +6,7 @@ on:
       - torr_watchdog
       - torrserver
       - tests/installer-regressions.sh
+      - tests/torr-cache-regression.sh
       - .github/workflows/installer-check.yml
   pull_request:
     paths:
@@ -107,3 +108,5 @@ jobs:
 
       - name: Entware status and confirmation regression tests
         run: sh tests/installer-regressions.sh
+      - name: TorrServer cache settings and mount regression tests
+        run: sudo sh tests/torr-cache-regression.sh
