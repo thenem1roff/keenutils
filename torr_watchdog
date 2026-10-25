@@ -19,12 +19,12 @@ INDEX_READY=0
 watchdog_complete() {
     [ -x "$WATCHDOG" ] &&
     sh -n "$WATCHDOG" >/dev/null 2>&1 &&
-    [ -f "$CRONTAB" ] &&
+    [ -f "$CRONTAB" ] && have grep &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' "$CRONTAB" &&
     grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' "$CRONTAB"
 }
 runtime_ready() {
-    for required in curl pgrep killall awk wc tail sync mkdir rm rmdir \
+    for required in curl pgrep killall awk grep wc tail sync mkdir rm rmdir \
         ls head cat sleep date; do
         have "$required" || return 1
     done
@@ -41,6 +41,13 @@ fi
 [ -d /opt/bin ] && [ -d /opt/etc ] || fail 'Entware в /opt не найдена'
 [ "$(id -u)" = 0 ] || fail 'Требуются права root'
 have opkg || fail 'Команда opkg не найдена'
+# opkg status parsing needs grep even if this BusyBox applet is absent.
+if ! have grep; then
+    opkg update || fail 'Не удалось обновить индекс Entware'
+    INDEX_READY=1
+    opkg install grep || fail 'Не удалось установить grep'
+    have grep || fail 'После установки grep команда недоступна'
+fi
 
 pkg_installed() {
     opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
@@ -288,6 +295,10 @@ for ENTRY in \
     '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh'
 do
     if ! grep -Fqx "$ENTRY" "$TMP_CRON"; then
+        # The existing crontab may lack a final newline. Separate records.
+        if [ "$CRON_CHANGED" -eq 0 ]; then
+            printf '\n' >> "$TMP_CRON" || fail 'Не удалось добавить разделитель Cron'
+        fi
         printf '%s\n' "$ENTRY" >> "$TMP_CRON" || fail 'Не удалось записать задание Cron'
         CRON_CHANGED=1
     fi
