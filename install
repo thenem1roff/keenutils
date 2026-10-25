@@ -97,6 +97,118 @@ ensure_ssl_wget() {
     fi
     install_pkg wget-ssl
 }
+# Install the downloaded installer once so it can be launched as "keenutils".
+# Do not silently replace an existing installation; menu item 88 does updates.
+KEENUTILS_BIN=/opt/bin/keenutils
+valid_keenutils() {
+    [ -s "$1" ] && sh -n "$1" >/dev/null 2>&1 &&
+        grep -Fq '# KeenUtils Installer:' "$1" &&
+        grep -Fq 'torrserver_menu() {' "$1"
+}
+ensure_mktemp() {
+    if ! have mktemp; then
+        install_pkg coreutils-mktemp || return 1
+        have mktemp || { err 'Не удалось установить mktemp.'; return 1; }
+    fi
+}
+bootstrap_keenutils() {
+    case "$0" in
+        /opt/bin/keenutils|keenutils) return 0 ;;
+    esac
+    if [ -e "$KEENUTILS_BIN" ] || [ -L "$KEENUTILS_BIN" ]; then
+        valid_keenutils "$KEENUTILS_BIN" ||
+            { err "Путь $KEENUTILS_BIN занят другим или повреждённым файлом. Не перезаписываю."; return 1; }
+        say 'KeenUtils уже установлен. Для обновления выберите пункт 88.'
+        exec "$KEENUTILS_BIN"
+    fi
+    case "$0" in
+        */*) [ -f "$0" ] && [ -r "$0" ] ||
+                 { err 'Не найден файл запуска. Скачайте скрипт в файл и запустите через sh.'; return 1; } ;;
+        *) err 'Запустите скачанный файл через sh /tmp/keenutils-install.sh (не через wget | sh).'; return 1 ;;
+    esac
+    valid_keenutils "$0" || { err 'Файл установки не прошёл проверку.'; return 1; }
+    ensure_mktemp || return 1
+    for cmd in cp mv chmod; do
+        have "$cmd" || { err "Не найдена команда $cmd"; return 1; }
+    done
+    temp=$(mktemp /opt/bin/.keenutils.XXXXXX) || return 1
+    if ! cp "$0" "$temp" || ! chmod 755 "$temp" ||
+       ! valid_keenutils "$temp"; then
+        rm -f "$temp"
+        err 'Не удалось подготовить KeenUtils в /opt/bin.'
+        return 1
+    fi
+    if ! mv "$temp" "$KEENUTILS_BIN"; then
+        rm -f "$temp"
+        err 'Не удалось сохранить /opt/bin/keenutils.'
+        return 1
+    fi
+    [ -x "$KEENUTILS_BIN" ] && valid_keenutils "$KEENUTILS_BIN" ||
+        { err 'После установки /opt/bin/keenutils не прошёл проверку.'; return 1; }
+    say 'KeenUtils установлен: /opt/bin/keenutils'
+    say 'В дальнейшем запускайте меню командой: keenutils'
+    exec "$KEENUTILS_BIN"
+}
+bootstrap_keenutils || exit 1
+
+# Menu item 88: download, validate and atomically replace the installed script.
+# Never update packages or the other utilities as a side effect.
+KEENUTILS_UPDATED=0
+update_keenutils() {
+    KEENUTILS_UPDATED=0
+    [ -x "$KEENUTILS_BIN" ] && valid_keenutils "$KEENUTILS_BIN" ||
+        { err 'KeenUtils не найден или повреждён в /opt/bin/keenutils.'; return 1; }
+    ask_yes 'Проверить обновление KeenUtils из GitHub?' yes || return 0
+    ensure_mktemp || return 1
+    for cmd in mv cp chmod rm; do
+        have "$cmd" || { err "Не найдена команда $cmd"; return 1; }
+    done
+    newfile=$(mktemp /opt/bin/.keenutils.new.XXXXXX) || return 1
+    say "Загрузка: $BASE_URL/install"
+    download_ok=0
+    if have wget && wget -q -O "$newfile" "$BASE_URL/install"; then
+        download_ok=1
+    else
+        if ! have curl; then
+            say 'wget недоступен или не поддерживает HTTPS; проверяю curl...'
+            ensure_curl || { rm -f "$newfile"; return 1; }
+        fi
+        if curl -fLSs --retry 2 --connect-timeout 15 --max-time 90 -o "$newfile" "$BASE_URL/install"; then
+            download_ok=1
+        fi
+    fi
+    if [ "$download_ok" -ne 1 ] || ! valid_keenutils "$newfile"; then
+        rm -f "$newfile"
+        err 'Скачанный KeenUtils не прошёл проверку. Установленная версия не изменена.'
+        return 1
+    fi
+    if have cmp && cmp -s "$newfile" "$KEENUTILS_BIN"; then
+        rm -f "$newfile"
+        say 'KeenUtils уже актуален, обновление не требуется.'
+        return 0
+    fi
+    backup=/opt/bin/keenutils.backup
+    if ! cp -p "$KEENUTILS_BIN" "$backup"; then
+        rm -f "$newfile"
+        err 'Не удалось создать резервную копию. Обновление отменено.'
+        return 1
+    fi
+    if ! chmod 755 "$newfile" || ! mv -f "$newfile" "$KEENUTILS_BIN"; then
+        rm -f "$newfile"
+        err 'Не удалось установить обновление. Исходный файл сохранён.'
+        return 1
+    fi
+    if ! [ -x "$KEENUTILS_BIN" ] || ! valid_keenutils "$KEENUTILS_BIN"; then
+        cp -p "$backup" "$KEENUTILS_BIN" ||
+            err "Не удалось восстановить KeenUtils! Резервная копия: $backup"
+        err 'Новая версия не прошла проверку, выполнен откат.'
+        return 1
+    fi
+    say 'KeenUtils успешно обновлён.'
+    say "Резервная копия: $backup"
+    KEENUTILS_UPDATED=1
+}
+
 repo_add() {
     name=$1
     feed=$2
@@ -435,6 +547,7 @@ menu() {
     say '  6. AWG Manager'
     say '  7. TorrServer'
     say ''
+    say ' 88. Обновить KeenUtils'
     say ' 99. Все установленные пакеты Entware'
     say ' 00. Выход'
     say '---------------------------------------------'
@@ -451,6 +564,13 @@ while :; do
         5|05) install_hydra ;;
         6|06) install_awg ;;
         7|07) torrserver_menu; continue ;;
+        88) update_keenutils
+            if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
+                say 'Нажмите Enter, чтобы открыть обновлённое меню.'
+                IFS= read -r _restart || :
+                exec "$KEENUTILS_BIN"
+            fi
+            ;;
         99) show_packages ;;
         00|0) say 'Выход.'; break ;;
         *) say 'Неизвестный пункт меню.' ;;

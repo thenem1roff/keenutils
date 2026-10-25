@@ -27,6 +27,39 @@ jobs:
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/opkg >/dev/null
           sudo chmod +x /opt/bin/opkg
           printf '00\n' | script -q -c 'sudo sh ./install' /dev/null | grep -q 'Выход.'
+      - name: KeenUtils installs persistent launcher and works offline
+        run: |
+          set -eu
+          test -x /opt/bin/keenutils
+          sh -n /opt/bin/keenutils
+          printf '00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-command.log
+          grep -q 'Выход.' /tmp/keenutils-command.log
+          grep -q '88. Обновить KeenUtils' /tmp/keenutils-command.log
+      - name: KeenUtils self-update and no-op update
+        run: |
+          set -eu
+          cp ./install /tmp/keenutils-ci-source
+          printf '\n# old-version-for-test\n' | sudo tee -a /opt/bin/keenutils >/dev/null
+          cat <<'MOCK_WGET' | sudo tee /opt/bin/wget >/dev/null
+          #!/bin/sh
+          [ "$1" = -q ] && [ "$2" = -O ] || exit 1
+          cp /tmp/keenutils-ci-source "$3"
+          MOCK_WGET
+          sudo chmod 755 /opt/bin/wget
+          # Choose 88, accept default Yes, Enter to restart, then 00 exits.
+          printf '88\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-updated.log
+          grep -q 'KeenUtils успешно обновлён' /tmp/keenutils-updated.log
+          grep -q 'Выход.' /tmp/keenutils-updated.log
+          cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
+          grep -q 'old-version-for-test' /opt/bin/keenutils.backup
+          # Running the same update again must not rewrite the installation.
+          printf '88\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-noop.log
+          grep -q 'уже актуален' /tmp/keenutils-noop.log
+          grep -q 'Выход.' /tmp/keenutils-noop.log
+          cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
       - name: TorrServer submenu navigation and independent actions
         run: |
           set -eu
