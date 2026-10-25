@@ -17,3 +17,9 @@ jobs:
         run: sh -n install
       - name: ShellCheck errors
         run: shellcheck --severity=error --shell=sh install
+      - name: Menu smoke test
+        run: |
+          sudo mkdir -p /opt/bin /opt/etc
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/opkg >/dev/null
+          sudo chmod +x /opt/bin/opkg
+          printf '00\n' | script -q -c 'sudo sh ./install' /dev/null | grep -q 'Выход.'
