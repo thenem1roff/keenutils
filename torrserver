@@ -1,4 +1,3 @@
-
 #!/bin/sh
 
 # TorrServer updater for Keenetic + Entware (ARM64)
@@ -39,10 +38,54 @@ echo "=== TorrServer Updater ==="
 [ -x "$BIN" ] || fail "TorrServer не найден"
 [ -f "$SERVICE" ] || fail "Скрипт службы не найден"
 
-for cmd in curl sed head cp mv chmod mktemp; do
-    command -v "$cmd" >/dev/null 2>&1 ||
-        fail "Не найдена команда: $cmd"
-done
+# Install ONLY missing Entware dependencies before the update. Works also
+# when called directly as: curl -fsSL .../torrserver | sh
+have() { command -v "$1" >/dev/null 2>&1; }
+have opkg || fail 'Не найден Entware opkg'
+[ "$(id -u)" = 0 ] || fail 'Требуются права root'
+INDEX_READY=0
+if ! have grep; then
+    opkg update || fail 'Не удалось обновить индекс Entware'
+    INDEX_READY=1
+    opkg install grep || fail 'Не удалось установить grep'
+    have grep || fail 'grep недоступен после установки'
+fi
+pkg_installed() {
+    opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+}
+ensure_package() {
+    package=$1
+    if pkg_installed "$package"; then return 0; fi
+    if [ "$INDEX_READY" -eq 0 ]; then
+        echo 'Обновление списка пакетов Entware...'
+        opkg update || fail 'Не удалось обновить индекс Entware'
+        INDEX_READY=1
+    fi
+    echo "Установка зависимости: $package"
+    opkg install "$package" || fail "Не удалось установить $package"
+    pkg_installed "$package" || fail "Пакет $package не найден после установки"
+}
+ensure_command() {
+    cmd=$1
+    tool_package=$2
+    have "$cmd" && return 0
+    ensure_package "$tool_package"
+    have "$cmd" || fail "Не найдена команда $cmd после установки $tool_package"
+}
+echo 'Проверка зависимостей TorrServer Updater...'
+ensure_package ca-certificates
+ensure_command curl curl
+ensure_command sed sed
+ensure_command head coreutils-head
+ensure_command cp coreutils-cp
+ensure_command mv coreutils-mv
+ensure_command chmod coreutils-chmod
+ensure_command mktemp coreutils-mktemp
+ensure_command awk gawk
+ensure_command date coreutils-date
+ensure_command sleep coreutils-sleep
+ensure_command rm coreutils-rm
+ensure_command pgrep procps-ng-pgrep
 
 CURRENT=$(version "$BIN")
 [ -n "$CURRENT" ] ||

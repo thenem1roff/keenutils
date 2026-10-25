@@ -2,41 +2,138 @@
 # Установка watchdog TorrServer для Keenetic / Entware.
 # Запуск: curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/torr_watchdog | sh
 set -eu
+export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
 
 fail() {
     printf 'ОШИБКА: %s\n' "$*" >&2
     exit 1
 }
-
+have() { command -v "$1" >/dev/null 2>&1; }
 WATCHDOG=/opt/bin/torr_watchdog.sh
 CRONTAB=/opt/etc/crontab
+INDEX_READY=0
 
-printf 'Проверка окружения...\n'
+# Check the complete existing installation BEFORE installing dependencies or
+# modifying anything. Running this installer again is safe when already set up.
+watchdog_complete() {
+    [ -x "$WATCHDOG" ] &&
+    sh -n "$WATCHDOG" >/dev/null 2>&1 &&
+    [ -f "$CRONTAB" ] && have grep &&
+    grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' "$CRONTAB" &&
+    grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' "$CRONTAB"
+}
+runtime_ready() {
+    for required in curl pgrep killall awk grep wc tail sync mkdir rm rmdir \
+        ls head cat sleep date; do
+        have "$required" || return 1
+    done
+    for init in /opt/etc/init.d/S*cron*; do
+        [ -x "$init" ] && return 0
+    done
+    return 1
+}
+if watchdog_complete && runtime_ready; then
+    printf 'TorrServer watchdog уже установлен: файл, зависимости и обе задачи Cron проверены. Изменений нет.\n'
+    exit 0
+fi
 
-for program in curl pgrep killall awk wc tail sync mktemp cp mv chmod mkdir rm rmdir grep; do
-    command -v "$program" >/dev/null 2>&1 || fail "Не найдена утилита $program"
-done
+[ -d /opt/bin ] && [ -d /opt/etc ] || fail 'Entware в /opt не найдена'
+[ "$(id -u)" = 0 ] || fail 'Требуются права root'
+have opkg || fail 'Команда opkg не найдена'
+# opkg status parsing needs grep even if this BusyBox applet is absent.
+if ! have grep; then
+    opkg update || fail 'Не удалось обновить индекс Entware'
+    INDEX_READY=1
+    opkg install grep || fail 'Не удалось установить grep'
+    have grep || fail 'После установки grep команда недоступна'
+fi
 
-[ -d /opt/bin ] || fail 'Каталог /opt/bin не найден'
-[ -f "$CRONTAB" ] || fail 'Не найден /opt/etc/crontab. Установите и настройте Cron.'
+pkg_installed() {
+    opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+}
+ensure_package() {
+    package=$1
+    if pkg_installed "$package"; then return 0; fi
+    if [ "$INDEX_READY" -eq 0 ]; then
+        printf 'Обновление списка пакетов Entware...\n'
+        opkg update || fail 'opkg update не выполнен'
+        INDEX_READY=1
+    fi
+    printf 'Установка зависимости: %s\n' "$package"
+    opkg install "$package" || fail "Не удалось установить $package"
+    pkg_installed "$package" || fail "Пакет $package отсутствует после установки"
+}
+ensure_command() {
+    cmd=$1
+    package=$2
+    if have "$cmd"; then return 0; fi
+    ensure_package "$package"
+    have "$cmd" || fail "После установки $package не найдена команда $cmd"
+}
+printf 'Проверка зависимостей watchdog...\n'
+# Entware may use BusyBox applets; add packages only when commands are absent.
+if ! have curl; then ensure_package ca-certificates; fi
+ensure_command curl curl
+ensure_command pgrep procps-ng-pgrep
+ensure_command killall psmisc
+ensure_command awk gawk
+ensure_command grep grep
+ensure_command wc coreutils-wc
+ensure_command tail coreutils-tail
+ensure_command sync coreutils-sync
+ensure_command mktemp coreutils-mktemp
+ensure_command cp coreutils-cp
+ensure_command mv coreutils-mv
+ensure_command chmod coreutils-chmod
+ensure_command mkdir coreutils-mkdir
+ensure_command rm coreutils-rm
+ensure_command rmdir coreutils-rmdir
+ensure_command ls coreutils-ls
+ensure_command head coreutils-head
+ensure_command cat coreutils-cat
+ensure_command sleep coreutils-sleep
+ensure_command date coreutils-date
+
+# Repair missing runtime dependencies without altering a working watchdog.
+if watchdog_complete && runtime_ready; then
+    printf 'Watchdog и Cron не изменялись; недостающие зависимости проверены.\n'
+    exit 0
+fi
+
+# Existing files are retained. Repair only missing Cron entries if the watchdog
+# file is present; never overwrite a pre-existing custom watchdog.
+if [ -e "$WATCHDOG" ]; then
+    [ -f "$WATCHDOG" ] && [ -x "$WATCHDOG" ] &&
+        sh -n "$WATCHDOG" >/dev/null 2>&1 ||
+        fail 'Watchdog существует, но файл повреждён или не исполняемый. Не перезаписываю.'
+    printf 'Обнаружен действующий файл watchdog; будет проверен только Cron.\n'
+fi
 
 CRON_INIT=''
 for init in /opt/etc/init.d/S*cron*; do
-    if [ -x "$init" ]; then
-        CRON_INIT=$init
-        break
-    fi
+    if [ -x "$init" ]; then CRON_INIT=$init; break; fi
 done
-[ -n "$CRON_INIT" ] || fail 'Не найден исполняемый init-скрипт Cron'
+if [ -z "$CRON_INIT" ]; then
+    pkg_installed cron &&
+        fail 'Пакет cron установлен, но init-скрипт отсутствует. Требуется ручная проверка.'
+    ensure_package cron
+    for init in /opt/etc/init.d/S*cron*; do
+        if [ -x "$init" ]; then CRON_INIT=$init; break; fi
+    done
+fi
+[ -n "$CRON_INIT" ] || fail 'После установки cron не найден init-скрипт'
+if [ ! -e "$CRONTAB" ]; then
+    : > "$CRONTAB" || fail 'Не удалось создать /opt/etc/crontab'
+    printf 'Создан новый файл /opt/etc/crontab.\n'
+fi
+[ -f "$CRONTAB" ] || fail '/opt/etc/crontab не является обычным файлом'
 
 TORR_INIT=''
 for init in /opt/etc/init.d/S*torrserver*; do
-    if [ -x "$init" ]; then
-        TORR_INIT=$init
-        break
-    fi
+    if [ -x "$init" ]; then TORR_INIT=$init; break; fi
 done
-[ -n "$TORR_INIT" ] || fail 'Не найден исполняемый init-скрипт TorrServer'
+[ -n "$TORR_INIT" ] || fail 'Не найден init-скрипт TorrServer'
 
 mkdir -p /opt/var/log || fail 'Не удалось создать каталог журналов'
 
@@ -198,19 +295,41 @@ for ENTRY in \
     '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh'
 do
     if ! grep -Fqx "$ENTRY" "$TMP_CRON"; then
+        # The existing crontab may lack a final newline. Separate records.
+        if [ "$CRON_CHANGED" -eq 0 ]; then
+            printf '\n' >> "$TMP_CRON" || fail 'Не удалось добавить разделитель Cron'
+        fi
         printf '%s\n' "$ENTRY" >> "$TMP_CRON" || fail 'Не удалось записать задание Cron'
         CRON_CHANGED=1
     fi
 done
 
-mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
-TMP_WATCHDOG=''
-
-if [ "$CRON_CHANGED" -eq 1 ]; then
-    mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
-    TMP_CRON=''
-    "$CRON_INIT" restart || fail 'Не удалось перезапустить Cron'
+if [ ! -e "$WATCHDOG" ]; then
+    mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
+    TMP_WATCHDOG=''
+else
+    printf 'Существующий файл watchdog оставлен без изменений.\n'
 fi
 
+if [ "$CRON_CHANGED" -eq 1 ]; then
+    # Restore the original crontab if restarting Cron fails.
+    CRON_BACKUP=$(mktemp /opt/etc/.crontab.torr_backup.XXXXXX) ||
+        fail 'Не удалось подготовить резервную копию crontab'
+    cp -p "$CRONTAB" "$CRON_BACKUP" || fail 'Не удалось сохранить crontab'
+    mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
+    TMP_CRON=''
+    if ! "$CRON_INIT" restart; then
+        cp -p "$CRON_BACKUP" "$CRONTAB" ||
+            fail "Не удалось восстановить crontab из $CRON_BACKUP"
+        "$CRON_INIT" restart || :
+        fail "Cron не запустился. Прежний crontab восстановлен. Копия: $CRON_BACKUP"
+    fi
+    rm -f "$CRON_BACKUP"
+fi
+
+# POST-INSTALL CHECK: file, execution mode, syntax and BOTH precise schedules.
+watchdog_complete && runtime_ready ||
+    fail 'Проверка после установки не пройдена: watchdog, Cron или зависимости'
+printf 'Проверка успешна: %s, права, синтаксис и обе записи Cron.\n' "$WATCHDOG"
 printf 'Watchdog установлен. Проверки каждые 30 секунд.\n'
 printf 'Журнал заполняется только при сбоях и восстановлении.\n'
