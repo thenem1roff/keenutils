@@ -112,7 +112,7 @@ fetch_and_run() {
     label=$2
     ensure_curl || return 1
     say "Источник: $url"
-    ask_yes "Запустить официальный внешний установщик $label?" no || return 0
+    ask_yes "Запустить официальный внешний установщик $label?" no || { say "Действие отменено."; return 2; }
     temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
     TMP_FILES="$TMP_FILES $temp"
     curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 -o "$temp" "$url" ||
@@ -178,6 +178,13 @@ install_keenkit() {
 install_hydra() {
     if pkg_installed hrneo && pkg_installed hrweb; then
         say 'HydraRoute Neo и HRweb уже установлены.'
+        return 0
+    fi
+    if pkg_installed hrneo && ! pkg_installed hrweb; then
+        say 'HydraRoute Neo установлен; отсутствует только HRweb.'
+        install_pkg hrweb || return 1
+        pkg_installed hrweb || return 1
+        say 'HRweb установлен.'
         return 0
     fi
     say 'Требуется KeeneticOS новее 4.3.6 и компонент Xtables-addons для Netfilter.'
@@ -284,7 +291,7 @@ configure_torr_cache() {
     rm -f "$probe"
     backup_dir=/opt/var/backups/keenutils
     mkdir -p "$backup_dir" || return 1
-    backup=$(mktemp "$backup_dir/torr-settings.XXXXXX.json") || return 1
+    backup=$(mktemp "$backup_dir/torr-settings.XXXXXX") || return 1
     chmod 600 "$backup" || return 1
     printf '%s\n' "$existing" > "$backup" || return 1
     say "Резервная копия настроек API: $backup"
@@ -305,13 +312,18 @@ configure_torr_cache() {
     set_torr_settings "$existing" || err "Не удалось восстановить настройки! Backup: $backup"
     return 1
 }
+watchdog_complete() {
+    [ -x /opt/bin/torr_watchdog.sh ] &&
+    [ -f /opt/etc/crontab ] &&
+    grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab &&
+    grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab
+}
 install_watchdog() {
+    if watchdog_complete; then
+        say 'TorrServer watchdog уже установлен и прописан в Cron (00 и 30 сек).'
+        return 0
+    fi
     if [ -f /opt/bin/torr_watchdog.sh ]; then
-        if [ -f /opt/etc/crontab ] &&
-           grep -Fq '/opt/bin/torr_watchdog.sh' /opt/etc/crontab; then
-            say 'TorrServer watchdog уже установлен и прописан в Cron.'
-            return 0
-        fi
         say 'Файл watchdog есть, но задача Cron не найдена.'
         ask_yes 'Запустить установщик для восстановления Cron?' no || return 0
     fi
@@ -324,9 +336,8 @@ install_watchdog() {
         have "$cmd" || { err "Для watchdog нужна команда $cmd."; return 1; }
     done
     fetch_and_run "$BASE_URL/torr_watchdog" TorrServer-watchdog || return 1
-    [ -f /opt/bin/torr_watchdog.sh ] &&
-        grep -Fq '/opt/bin/torr_watchdog.sh' /opt/etc/crontab ||
-        { err 'Не найдены watchdog и/или записи Cron.'; return 1; }
+    watchdog_complete ||
+        { err 'Не найдены watchdog и/или обе записи Cron.'; return 1; }
     say 'Watchdog проверен. Существующие задания не удалялись.'
 }
 install_torrserver() {
