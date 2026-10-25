@@ -393,7 +393,7 @@ setup_torr_cache() {
 # Nested menu: each operation is independent. 0 returns directly to main.
 torrserver_menu() {
     while :; do
-        printf '\\033[2J\\033[H'
+        printf '\033[2J\033[H'
         say '============================================='
         say '         TorrServer | Управление'
         say '============================================='
