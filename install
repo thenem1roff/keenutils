@@ -1,0 +1,397 @@
+#!/bin/sh
+# KeenUtils Installer: interactive menu for Keenetic + Entware.
+# Run from a saved file, not "curl | sh", to preserve interactive stdin.
+set -u
+export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+
+BASE_URL="https://raw.githubusercontent.com/thenem1roff/keenutils/main"
+INDEX_READY=0
+TMP_FILES=""
+
+clean_up() {
+    for item in $TMP_FILES; do
+        [ -f "$item" ] && rm -f "$item"
+    done
+}
+trap clean_up EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+say() { printf '%s\n' "$*"; }
+err() { printf 'ОШИБКА: %s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Always read user answers from a terminal, including when launched from pipe.
+if [ ! -t 0 ]; then
+    [ -r /dev/tty ] || { err 'Необходим интерактивный терминал.'; exit 1; }
+    exec </dev/tty
+fi
+if ! have opkg || [ ! -d /opt/etc ] || [ ! -d /opt/bin ]; then
+    err 'Не найдена рабочая среда Entware в /opt.'
+    exit 1
+fi
+if [ "$(id -u)" != "0" ]; then
+    err 'Запустите установщик с правами root в Entware.'
+    exit 1
+fi
+
+pause_menu() {
+    printf '\nНажмите Enter для возврата в меню... '
+    IFS= read -r _pause || :
+}
+ask_yes() {
+    question=$1
+    default=$2
+    if [ "$default" = yes ]; then
+        printf '%s [Д/н]: ' "$question"
+    else
+        printf '%s [д/Н]: ' "$question"
+    fi
+    IFS= read -r answer || return 1
+    case "$answer" in
+        '') [ "$default" = yes ] ;;
+        y|Y|yes|YES|д|Д|да|Да|ДА) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+pkg_installed() {
+    opkg status "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+}
+sync_index() {
+    if [ "$INDEX_READY" -eq 0 ]; then
+        say 'Обновление списка пакетов Entware...'
+        opkg update || { err 'opkg update не выполнен.'; return 1; }
+        INDEX_READY=1
+    fi
+}
+install_pkg() {
+    package=$1
+    if pkg_installed "$package"; then
+        say "$package: уже установлен."
+        return 0
+    fi
+    sync_index || return 1
+    say "Установка зависимости/пакета: $package"
+    opkg install "$package" || return 1
+    pkg_installed "$package" || { err "$package отсутствует после установки."; return 1; }
+}
+ensure_curl() {
+    install_pkg ca-certificates && install_pkg curl && have curl
+}
+ensure_jq() {
+    install_pkg jq && have jq
+}
+ensure_ssl_wget() {
+    install_pkg ca-certificates || return 1
+    if pkg_installed wget-ssl; then return 0; fi
+    if pkg_installed wget-nossl; then
+        say 'wget-nossl конфликтует с wget-ssl.'
+        ask_yes 'Удалить wget-nossl для HTTPS-репозиториев?' no || return 1
+        opkg remove wget-nossl || return 1
+    fi
+    install_pkg wget-ssl
+}
+repo_add() {
+    name=$1
+    feed=$2
+    path="/opt/etc/opkg/$name.conf"
+    line="src/gz $name $feed"
+    mkdir -p /opt/etc/opkg || return 1
+    if [ -e "$path" ]; then
+        grep -Fqx "$line" "$path" && return 0
+        err "В $path есть другая конфигурация. Не перезаписываю."
+        return 1
+    fi
+    printf '%s\n' "$line" > "$path" || return 1
+    INDEX_READY=0
+    say "Добавлен репозиторий: $name"
+}
+fetch_and_run() {
+    url=$1
+    label=$2
+    ensure_curl || return 1
+    say "Источник: $url"
+    ask_yes "Запустить официальный внешний установщик $label?" no || return 0
+    temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
+    TMP_FILES="$TMP_FILES $temp"
+    curl -fLSs --connect-timeout 15 --max-time 90 --retry 2 -o "$temp" "$url" ||
+        { err 'Не удалось скачать установщик.'; return 1; }
+    [ -s "$temp" ] && sh -n "$temp" ||
+        { err 'Скрипт пуст или содержит ошибки синтаксиса sh.'; return 1; }
+    sh "$temp"
+}
+install_nfqws() {
+    if pkg_installed nfqws-keenetic; then say 'nfqws уже установлен.'; return 0; fi
+    if pkg_installed nfqws2-keenetic; then
+        err 'Установлен nfqws2. Эти пакеты конфликтуют. Автоудаление запрещено.'
+        return 1
+    fi
+    say 'Примечание: nfqws (v1) больше не развивается; рекомендуется nfqws2.'
+    ask_yes 'Продолжить установку nfqws?' no || return 0
+    ensure_ssl_wget || return 1
+    repo_add nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all || return 1
+    install_pkg nfqws-keenetic || return 1
+    [ -f /opt/etc/nfqws/nfqws.conf ] ||
+        { err 'Не найден ожидаемый /opt/etc/nfqws/nfqws.conf'; return 1; }
+    say 'nfqws: пакет и конфигурация найдены.'
+}
+install_nfqws2() {
+    if pkg_installed nfqws2-keenetic; then say 'nfqws2 уже установлен.'; return 0; fi
+    if pkg_installed nfqws-keenetic; then
+        err 'Установлен nfqws. Для перехода требуется отдельная ручная миграция.'
+        return 1
+    fi
+    ensure_ssl_wget || return 1
+    repo_add nfqws2-keenetic https://nfqws.github.io/nfqws2-keenetic/all || return 1
+    install_pkg nfqws2-keenetic || return 1
+    [ -f /opt/etc/nfqws2/nfqws2.conf ] ||
+        { err 'Не найден ожидаемый /opt/etc/nfqws2/nfqws2.conf'; return 1; }
+    say 'nfqws2: пакет и конфигурация найдены.'
+}
+install_nfqws_web() {
+    if pkg_installed nfqws-keenetic-web; then say 'nfqws-web уже установлен.'; return 0; fi
+    if ! pkg_installed nfqws-keenetic && ! pkg_installed nfqws2-keenetic; then
+        say 'Внимание: сначала рекомендуется установить nfqws или nfqws2.'
+        ask_yes 'Продолжить без nfqws?' no || return 0
+    fi
+    ensure_ssl_wget || return 1
+    repo_add nfqws-keenetic-web https://nfqws.github.io/nfqws-keenetic-web/all || return 1
+    install_pkg nfqws-keenetic-web || return 1
+    [ -f /opt/etc/nfqws_web.conf ] ||
+        { err 'Не найден ожидаемый /opt/etc/nfqws_web.conf'; return 1; }
+    say 'nfqws-web установлен. Интерфейс обычно доступен на порту 90.'
+}
+install_keenkit() {
+    if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
+        say 'KeenKit уже установлен.'
+        return 0
+    fi
+    fetch_and_run https://raw.githubusercontent.com/spatiumstas/KeenKit/main/install.sh KeenKit || return 1
+    if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
+        say 'KeenKit установлен в /opt/keenkit.sh и /opt/bin/keenkit.'
+    else
+        err 'KeenKit не найден в ожидаемых каталогах (или установка отменена).'
+        return 1
+    fi
+}
+install_hydra() {
+    if pkg_installed hrneo && pkg_installed hrweb; then
+        say 'HydraRoute Neo и HRweb уже установлены.'
+        return 0
+    fi
+    say 'Требуется KeeneticOS новее 4.3.6 и компонент Xtables-addons для Netfilter.'
+    ask_yes 'Вы проверили требования HydraRoute Neo?' no || return 0
+    fetch_and_run https://git.zerrolabs.org/Ground-Zerro/release/pages/keenetic/install-neo.sh HydraRoute-Neo || return 1
+    if pkg_installed hrneo && pkg_installed hrweb; then
+        say 'HydraRoute Neo и HRweb установлены (интерфейс: порт 2000).'
+    else
+        err 'Не обнаружены оба ожидаемых пакета hrneo и hrweb.'
+        return 1
+    fi
+}
+install_awg() {
+    if pkg_installed awg-manager; then say 'AWG Manager уже установлен.'; return 0; fi
+    say 'Требуется компонент WireGuard в KeeneticOS.'
+    ask_yes 'Компонент WireGuard установлен?' no || return 0
+    fetch_and_run https://raw.githubusercontent.com/hoaxisr/awg-manager/develop/scripts/install.sh AWG-Manager || return 1
+    pkg_installed awg-manager ||
+        { err 'Пакет awg-manager не найден после установки (или установка отменена).'; return 1; }
+    [ -d /opt/etc/awg-manager ] ||
+        { err 'Не найден ожидаемый каталог /opt/etc/awg-manager.'; return 1; }
+    say 'AWG Manager установлен (интерфейс: обычно порт 2222).'
+}
+torr_present() {
+    pkg_installed torrserver || [ -x /opt/sbin/torrserver ]
+}
+torr_service() {
+    TORR_INIT=''
+    for init in /opt/etc/init.d/S*torrserver*; do
+        if [ -x "$init" ]; then TORR_INIT=$init; break; fi
+    done
+    [ -n "$TORR_INIT" ]
+}
+# Find the mount that contains /opt. Never guess a different USB drive.
+find_entware_disk() {
+    DISK_ROOT=''
+    have stat || { err 'Отсутствует stat для сверки файловой системы.'; return 1; }
+    opt_id=$(stat -L -c %d /opt 2>/dev/null) || return 1
+    [ -n "$opt_id" ] || return 1
+    # Keenetic normally mounts disks under /tmp/mnt/<volume-id>.
+    for candidate in $(awk '$2 ~ /^\/tmp\/mnt\/[^\/]+$/ {print $2}' /proc/mounts); do
+        [ -d "$candidate" ] || continue
+        id=$(stat -L -c %d "$candidate" 2>/dev/null) || continue
+        [ "$id" = "$opt_id" ] || continue
+        if [ -n "$DISK_ROOT" ] && [ "$DISK_ROOT" != "$candidate" ]; then
+            err 'Несколько накопителей подходят под /opt; автоподбор отменён.'
+            return 1
+        fi
+        DISK_ROOT=$candidate
+    done
+    # For symlinked /opt, /proc/mounts may omit the matched mount.
+    if [ -z "$DISK_ROOT" ] && have readlink; then
+        resolved=$(readlink -f /opt 2>/dev/null) || resolved=''
+        case "$resolved" in
+            /tmp/mnt/*)
+                volume=$(printf '%s\n' "$resolved" | cut -d / -f4)
+                candidate="/tmp/mnt/$volume"
+                if [ -d "$candidate" ] &&
+                   [ "$(stat -L -c %d "$candidate" 2>/dev/null)" = "$opt_id" ]; then
+                    DISK_ROOT=$candidate
+                fi
+                ;;
+        esac
+    fi
+    case "$DISK_ROOT" in
+        /tmp/mnt/*) return 0 ;;
+        *) err 'Не удалось однозначно определить накопитель Entware. Кеш не меняю.'; return 1 ;;
+    esac
+}
+get_torr_settings() {
+    curl -fsS --connect-timeout 3 --max-time 10 \
+        -H 'Content-Type: application/json' \
+        -d '{"action":"get"}' http://127.0.0.1:8090/settings
+}
+set_torr_settings() {
+    sets=$1
+    request=$(printf '%s' "$sets" | jq -c '{action:"set",sets:.}') || return 1
+    curl -fsS --connect-timeout 3 --max-time 15 -o /dev/null \
+        -H 'Content-Type: application/json' -d "$request" \
+        http://127.0.0.1:8090/settings
+}
+configure_torr_cache() {
+    ensure_curl && ensure_jq || return 1
+    find_entware_disk || return 1
+    CACHE_DIR="$DISK_ROOT/tscashe"
+    say "Накопитель Entware: $DISK_ROOT"
+    say "Предлагаемый кеш:   $CACHE_DIR"
+    [ -w "$DISK_ROOT" ] || { err 'Накопитель недоступен для записи.'; return 1; }
+    existing=$(get_torr_settings) ||
+        { err 'API TorrServer недоступен или требует авторизацию. Настройки не меняю.'; return 1; }
+    printf '%s' "$existing" | jq -e 'type=="object" and has("UseDisk") and has("TorrentsSavePath")' >/dev/null ||
+        { err 'Неожиданный формат настроек API.'; return 1; }
+    previous=$(printf '%s' "$existing" | jq -r '.TorrentsSavePath')
+    usedisk=$(printf '%s' "$existing" | jq -r '.UseDisk')
+    say "Текущий путь: $previous (UseDisk=$usedisk)"
+    if [ "$previous" = "$CACHE_DIR" ] && [ "$usedisk" = true ]; then
+        say 'Путь кеша уже настроен. Изменения не нужны.'
+        return 0
+    fi
+    ask_yes 'Изменить настройки кеша TorrServer?' yes || return 0
+    mkdir -p "$CACHE_DIR" || return 1
+    probe="$CACHE_DIR/.keenutils-check.$$"
+    : > "$probe" || { err 'Нельзя записать в каталог кеша.'; return 1; }
+    rm -f "$probe"
+    backup_dir=/opt/var/backups/keenutils
+    mkdir -p "$backup_dir" || return 1
+    backup=$(mktemp "$backup_dir/torr-settings.XXXXXX.json") || return 1
+    chmod 600 "$backup" || return 1
+    printf '%s\n' "$existing" > "$backup" || return 1
+    say "Резервная копия настроек API: $backup"
+    updated=$(printf '%s' "$existing" |
+        jq -c --arg p "$CACHE_DIR" '.TorrentsSavePath=$p | .UseDisk=true') || return 1
+    if ! set_torr_settings "$updated"; then
+        err 'API не подтвердил изменение. Проверьте настройки вручную.'
+        return 1
+    fi
+    observed=$(get_torr_settings) || observed=''
+    actual=$(printf '%s' "$observed" | jq -r '.TorrentsSavePath // empty' 2>/dev/null)
+    flag=$(printf '%s' "$observed" | jq -r '.UseDisk // false' 2>/dev/null)
+    if [ "$actual" = "$CACHE_DIR" ] && [ "$flag" = true ]; then
+        say "Кеш TorrServer успешно настроен: $CACHE_DIR"
+        return 0
+    fi
+    err 'Проверка настроек не прошла; пробую восстановить сохранённые значения.'
+    set_torr_settings "$existing" || err "Не удалось восстановить настройки! Backup: $backup"
+    return 1
+}
+install_watchdog() {
+    if [ -f /opt/bin/torr_watchdog.sh ]; then
+        if [ -f /opt/etc/crontab ] &&
+           grep -Fq '/opt/bin/torr_watchdog.sh' /opt/etc/crontab; then
+            say 'TorrServer watchdog уже установлен и прописан в Cron.'
+            return 0
+        fi
+        say 'Файл watchdog есть, но задача Cron не найдена.'
+        ask_yes 'Запустить установщик для восстановления Cron?' no || return 0
+    fi
+    torr_service || { err 'Служба TorrServer не найдена.'; return 1; }
+    if [ ! -f /opt/etc/crontab ]; then
+        err 'Не найден /opt/etc/crontab. Сначала настройте Cron.'
+        return 1
+    fi
+    for cmd in pgrep killall awk wc tail sync; do
+        have "$cmd" || { err "Для watchdog нужна команда $cmd."; return 1; }
+    done
+    fetch_and_run "$BASE_URL/torr_watchdog" TorrServer-watchdog || return 1
+    [ -f /opt/bin/torr_watchdog.sh ] &&
+        grep -Fq '/opt/bin/torr_watchdog.sh' /opt/etc/crontab ||
+        { err 'Не найдены watchdog и/или записи Cron.'; return 1; }
+    say 'Watchdog проверен. Существующие задания не удалялись.'
+}
+install_torrserver() {
+    if torr_present; then
+        say 'TorrServer уже установлен.'
+    else
+        install_pkg torrserver || return 1
+    fi
+    [ -x /opt/sbin/torrserver ] ||
+        { err 'Нет исполняемого /opt/sbin/torrserver.'; return 1; }
+    torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
+    say 'TorrServer: бинарник и служба обнаружены.'
+    if [ "$(uname -m)" = aarch64 ]; then
+        if ask_yes 'Проверить и при необходимости обновить TorrServer с GitHub?' yes; then
+            fetch_and_run "$BASE_URL/torrserver" TorrServer-updater ||
+                err 'Обновление TorrServer не удалось; проверьте версию и API.'
+        fi
+    else
+        say 'Обновлятор keenutils/torrserver поддерживает только aarch64. Пропуск.'
+    fi
+    if ask_yes 'Настроить кеш на накопителе Entware?' yes; then
+        configure_torr_cache || err 'Кеш не изменён.'
+    fi
+    if ask_yes 'Установить TorrServer watchdog?' yes; then
+        install_watchdog || err 'Watchdog не установлен.'
+    fi
+    say 'Этап настройки TorrServer завершён.'
+}
+show_packages() {
+    say 'Установленные пакеты Entware:'
+    opkg list-installed | sort
+}
+# EXTENSION POINT: add a menu line and one case branch calling install_*.
+menu() {
+    printf '\033[2J\033[H'
+    say '============================================='
+    say '       KeenUtils Installer | Entware'
+    say '============================================='
+    say '  1. nfqws'
+    say '  2. nfqws2'
+    say '  3. nfqws-web'
+    say '  4. KeenKit'
+    say '  5. HydraRoute Neo'
+    say '  6. AWG Manager'
+    say '  7. TorrServer'
+    say ''
+    say ' 99. Все установленные пакеты Entware'
+    say ' 00. Выход'
+    say '---------------------------------------------'
+    printf 'Выберите действие: '
+}
+while :; do
+    menu
+    IFS= read -r choice || break
+    case "$choice" in
+        1|01) install_nfqws ;;
+        2|02) install_nfqws2 ;;
+        3|03) install_nfqws_web ;;
+        4|04) install_keenkit ;;
+        5|05) install_hydra ;;
+        6|06) install_awg ;;
+        7|07) install_torrserver ;;
+        99) show_packages ;;
+        00|0) say 'Выход.'; break ;;
+        *) say 'Неизвестный пункт меню.' ;;
+    esac
+    pause_menu
+done
