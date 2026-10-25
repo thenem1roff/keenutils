@@ -27,6 +27,25 @@ jobs:
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/opkg >/dev/null
           sudo chmod +x /opt/bin/opkg
           printf '00\n' | script -q -c 'sudo sh ./install' /dev/null | grep -q 'Выход.'
+      - name: TorrServer submenu navigation and independent actions
+        run: |
+          set -eu
+          # 7 opens submenu; 0 goes straight back; 00 exits main menu.
+          printf '7\n0\n00\n' |
+            script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-menu.log
+          grep -q 'TorrServer | Управление' /tmp/torr-menu.log
+          grep -q '4. Настроить кеш TorrServer' /tmp/torr-menu.log
+          grep -q 'Выход.' /tmp/torr-menu.log
+          # Updating a missing TorrServer must not trigger installation.
+          printf '7\n2\n\n0\n00\n' |
+            script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-update-absent.log
+          grep -q 'TorrServer не установлен' /tmp/torr-update-absent.log
+          grep -q 'Выход.' /tmp/torr-update-absent.log
+          # Cache configuration is an independent menu action.
+          printf '7\n4\n\n0\n00\n' |
+            script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-cache-absent.log
+          grep -q 'TorrServer не установлен' /tmp/torr-cache-absent.log
+          grep -q 'Выход.' /tmp/torr-cache-absent.log
       - name: Watchdog existing installation and repair smoke tests
         run: |
           set -eu
