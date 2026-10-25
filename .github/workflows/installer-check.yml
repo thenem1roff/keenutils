@@ -3,10 +3,14 @@ on:
   push:
     paths:
       - install
+      - torr_watchdog
+      - torrserver
       - .github/workflows/installer-check.yml
   pull_request:
     paths:
       - install
+      - torr_watchdog
+      - torrserver
       - .github/workflows/installer-check.yml
 jobs:
   shell:
@@ -14,12 +18,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: POSIX shell syntax
-        run: sh -n install
+        run: sh -n install && sh -n torr_watchdog && sh -n torrserver
       - name: ShellCheck errors
-        run: shellcheck --severity=error --shell=sh install
+        run: shellcheck --severity=error --shell=sh install torr_watchdog torrserver
       - name: Menu smoke test
         run: |
           sudo mkdir -p /opt/bin /opt/etc
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/opkg >/dev/null
           sudo chmod +x /opt/bin/opkg
           printf '00\n' | script -q -c 'sudo sh ./install' /dev/null | grep -q 'Выход.'
+      - name: Watchdog existing installation and repair smoke tests
+        run: |
+          set -eu
+          sudo mkdir -p /opt/etc/init.d /opt/bin
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
+          sudo chmod 755 /opt/bin/torr_watchdog.sh
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S90torrserver >/dev/null
+          sudo chmod 755 /opt/etc/init.d/S10cron /opt/etc/init.d/S90torrserver
+          printf '* * * * * root /opt/bin/torr_watchdog.sh\n* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh\n' | sudo tee /opt/etc/crontab >/dev/null
+          before="$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
+          sudo sh ./torr_watchdog | grep -q 'уже установлен'
+          after="$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
+          test "$before" = "$after"
+          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\nexit 0')"
+          printf '* * * * * root /opt/bin/torr_watchdog.sh\n' | sudo tee /opt/etc/crontab >/dev/null
+          sudo sh ./torr_watchdog | grep -q 'Проверка успешна'
+          test "$(grep -Fxc '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab)" = 1
+          test "$(grep -Fxc '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab)" = 1
+          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\nexit 0')"
