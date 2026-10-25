@@ -5,6 +5,8 @@ on:
       - install
       - torr_watchdog
       - torrserver
+      - sources.conf
+      - tests/sources-regression.sh
       - tests/installer-regressions.sh
       - tests/torr-cache-regression.sh
       - .github/workflows/installer-check.yml
@@ -13,6 +15,8 @@ on:
       - install
       - torr_watchdog
       - torrserver
+      - sources.conf
+      - tests/sources-regression.sh
       - .github/workflows/installer-check.yml
 jobs:
   shell:
@@ -65,19 +69,19 @@ jobs:
       - name: TorrServer submenu navigation and independent actions
         run: |
           set -eu
-          # 7 opens submenu; 0 goes straight back; 00 exits main menu.
-          printf '7\n0\n00\n' |
+          # 8 opens submenu; 0 goes straight back; 00 exits main menu.
+          printf '8\n0\n00\n' |
             script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-menu.log
           grep -q 'TorrServer | Управление' /tmp/torr-menu.log
           grep -q '4. Настроить кеш TorrServer' /tmp/torr-menu.log
           grep -q 'Выход.' /tmp/torr-menu.log
           # Updating a missing TorrServer must not trigger installation.
-          printf '7\n2\n\n0\n00\n' |
+          printf '8\n2\n\n0\n00\n' |
             script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-update-absent.log
           grep -q 'TorrServer не установлен' /tmp/torr-update-absent.log
           grep -q 'Выход.' /tmp/torr-update-absent.log
           # Cache configuration is an independent menu action.
-          printf '7\n4\n\n0\n00\n' |
+          printf '8\n4\n\n0\n00\n' |
             script -q -c 'sudo sh ./install' /dev/null > /tmp/torr-cache-absent.log
           grep -q 'TorrServer не установлен' /tmp/torr-cache-absent.log
           grep -q 'Выход.' /tmp/torr-cache-absent.log
@@ -110,3 +114,5 @@ jobs:
         run: sh tests/installer-regressions.sh
       - name: TorrServer cache settings and mount regression tests
         run: sudo sh tests/torr-cache-regression.sh
+      - name: Source catalog and original nfqws-menu delegation
+        run: sudo sh tests/sources-regression.sh
