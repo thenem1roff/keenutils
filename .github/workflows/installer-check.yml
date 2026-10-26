@@ -9,6 +9,7 @@ on:
       - tests/sources-regression.sh
       - tests/installer-regressions.sh
       - tests/uninstall-regressions.sh
+      - tests/self-uninstall-regressions.sh
       - tests/header-regressions.sh
       - tests/menu-navigation-regressions.sh
       - tests/torr-cache-regression.sh
@@ -127,3 +128,5 @@ jobs:
         run: sudo sh tests/header-regressions.sh
       - name: Enter exits/back from each menu
         run: sudo sh tests/menu-navigation-regressions.sh
+      - name: Self-uninstall and preservation regression tests
+        run: sudo sh tests/self-uninstall-regressions.sh
