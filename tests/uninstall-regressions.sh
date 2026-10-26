@@ -113,4 +113,33 @@ printf '77\n1\n1\ny\n\n0\n0\n00\n' |
 grep -Fxq 'remove hrweb' /tmp/keenutils-uninstall-log
 grep -Fxq 'remove hrneo' /tmp/keenutils-uninstall-log
 ! grep -q 'hr-uninstall.sh' /tmp/keenutils-uninstall-log
+# A service script still present means we must not erase active NFQWS files
+# even if opkg metadata is corrupted.
+: >/tmp/keenutils-uninstall-pkgs
+mkdir -p /opt/etc/nfqws2
+printf 'KEEP\n' >/opt/etc/nfqws2/nfqws2.conf
+printf '#!/bin/sh\nexit 0\n' >/opt/etc/init.d/S51nfqws2
+chmod 755 /opt/etc/init.d/S51nfqws2
+printf '77\n1\n2\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-service-guard.log
+grep -Fq 'Найдена служба nfqws2' /tmp/u-service-guard.log
+grep -Fxq KEEP /opt/etc/nfqws2/nfqws2.conf
+rm -f /opt/etc/init.d/S51nfqws2 /opt/etc/nfqws2/nfqws2.conf
+rmdir /opt/etc/nfqws2
+
+# AWG removal saves VPN secrets until the user explicitly chooses cleanup.
+printf 'awg-manager\n' >/tmp/keenutils-uninstall-pkgs
+mkdir -p /opt/etc/awg-manager
+printf 'PRIVATE TEST KEY\n' >/opt/etc/awg-manager/keys.conf
+printf '77\n1\n1\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-awg-delete.log
+grep -Fxq 'remove awg-manager' /tmp/keenutils-uninstall-log
+grep -Fxq 'PRIVATE TEST KEY' /opt/etc/awg-manager/keys.conf
+printf '77\n1\n2\nn\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-awg-keep.log
+[ -s /opt/etc/awg-manager/keys.conf ]
+printf '77\n1\n2\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-awg-clean.log
+[ ! -e /opt/etc/awg-manager ]
+grep -Fq 'VPN-ключи' /tmp/u-awg-clean.log
 echo 'Uninstall menu: cancel/remove/residue/watchdog/unknown-cron/Hydra tests passed.'
