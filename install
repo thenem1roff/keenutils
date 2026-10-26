@@ -805,6 +805,453 @@ torrserver_menu() {
         pause_menu
     done
 }
+# Menu 77: removal is explicit, offline, and independent of installation.
+# No generic "rm dependencies": only known application-specific paths can
+# be cleaned, and only after the owning package has been uninstalled.
+u_label() {
+    case "$1" in
+        nfqws) say 'nfqws' ;;
+        nfqws2) say 'nfqws2' ;;
+        nfqws-web) say 'nfqws-web' ;;
+        nfqws-menu) say 'nfqws-menu' ;;
+        keenkit) say 'KeenKit' ;;
+        hydra) say 'HydraRoute Neo' ;;
+        awg) say 'AWG Manager' ;;
+        torrserver) say 'TorrServer' ;;
+        torr-watchdog) say 'TorrServer watchdog' ;;
+    esac
+}
+u_cron_has_watchdog() {
+    [ -f /opt/etc/crontab ] &&
+        grep -Fq '/opt/bin/torr_watchdog.sh' /opt/etc/crontab
+}
+u_watchdog_present() {
+    [ -e /opt/bin/torr_watchdog.sh ] || [ -L /opt/bin/torr_watchdog.sh ] ||
+        u_cron_has_watchdog
+}
+u_torr_cache_path() {
+    U_CACHE=''
+    OPT_FS_ID=$(filesystem_id /opt) || return 1
+    for U_CANDIDATE in /tmp/mnt/*; do
+        verify_entware_disk "$U_CANDIDATE" || continue
+        [ -d "$U_CANDIDATE/tscashe" ] || continue
+        if [ -n "$U_CACHE" ]; then
+            U_CACHE=''
+            return 1
+        fi
+        U_CACHE="$U_CANDIDATE/tscashe"
+    done
+    [ -n "$U_CACHE" ]
+}
+# Exact allowlist of application-owned residue paths. Never accept user input
+# as a deletion path, and do not remove shared Entware libraries.
+u_paths() {
+    case "$1" in
+        nfqws)
+            printf '%s\n' /opt/etc/nfqws /opt/etc/opkg/nfqws-keenetic.conf ;;
+        nfqws2)
+            printf '%s\n' /opt/etc/nfqws2 /opt/etc/opkg/nfqws2-keenetic.conf ;;
+        nfqws-web)
+            printf '%s\n' /opt/etc/nfqws_web.conf /opt/etc/opkg/nfqws-keenetic-web.conf ;;
+        nfqws-menu)
+            printf '%s\n' /opt/etc/nfqws-menu /opt/etc/nfqws-menu.lang ;;
+        keenkit)
+            # Only the script and its official launcher are managed here.
+            printf '%s\n' /opt/keenkit.sh /opt/bin/keenkit ;;
+        hydra)
+            printf '%s\n' /opt/etc/HydraRoute ;;
+        awg)
+            printf '%s\n' /opt/etc/awg-manager ;;
+        torrserver)
+            printf '%s\n' /opt/etc/torrserver /opt/sbin/torrserver \
+                /opt/etc/init.d/S90torrserver
+            if u_torr_cache_path; then printf '%s\n' "$U_CACHE"; fi ;;
+        torr-watchdog)
+            printf '%s\n' /opt/bin/torr_watchdog.sh ;;
+    esac
+}
+u_detect() {
+    U_INSTALLED=0
+    U_LEFT=0
+    case "$1" in
+        nfqws) pkg_installed nfqws-keenetic && U_INSTALLED=1 ;;
+        nfqws2) pkg_installed nfqws2-keenetic && U_INSTALLED=1 ;;
+        nfqws-web) pkg_installed nfqws-keenetic-web && U_INSTALLED=1 ;;
+        nfqws-menu) [ -s /opt/nfqws-menu.sh ] && U_INSTALLED=1 ;;
+        keenkit) [ -f /opt/keenkit.sh ] && U_INSTALLED=1 ;;
+        hydra)
+            if pkg_installed hrneo || pkg_installed hrweb; then U_INSTALLED=1; fi ;;
+        awg) pkg_installed awg-manager && U_INSTALLED=1 ;;
+        torrserver) pkg_installed torrserver && U_INSTALLED=1 ;;
+        torr-watchdog) u_watchdog_present && U_INSTALLED=1 ;;
+    esac
+    for U_CHECK_PATH in $(u_paths "$1"); do
+        if [ -e "$U_CHECK_PATH" ] || [ -L "$U_CHECK_PATH" ]; then
+            U_LEFT=1
+            break
+        fi
+    done
+    if [ "$1" = torrserver ] && u_watchdog_present; then U_LEFT=1; fi
+}
+u_show_status() {
+    u_detect "$1"
+    say "Программа: $(u_label "$1")"
+    if [ "$U_INSTALLED" -eq 1 ]; then
+        say 'Установка: обнаружена.'
+    elif [ "$U_LEFT" -eq 1 ]; then
+        say 'Программа удалена или установлена не через opkg; остались файлы.'
+    else
+        say 'Программа и известные остатки не обнаружены.'
+    fi
+    say 'Обнаруженные файлы и каталоги:'
+    U_FOUND=0
+    for U_SHOW_PATH in $(u_paths "$1"); do
+        if [ -e "$U_SHOW_PATH" ] || [ -L "$U_SHOW_PATH" ]; then
+            say "  $U_SHOW_PATH"
+            U_FOUND=1
+        fi
+    done
+    [ "$U_FOUND" -eq 1 ] || say '  (нет)'
+    if [ "$1" = torrserver ] && u_watchdog_present; then
+        say 'Watchdog: обнаружен (управляется отдельно).'
+    fi
+    if [ "$1" = torr-watchdog ] && u_cron_has_watchdog; then
+        say 'Cron: найдены задания запуска watchdog.'
+    fi
+    case "$1" in
+        nfqws|nfqws2)
+            say 'Пользовательские политики KeeneticOS штатный postrm не удаляет.' ;;
+        hydra)
+            say 'Полный hr-uninstall.sh может затронуть Xray, AdGuardHome и другие пакеты.'
+            say 'KeenUtils намеренно НЕ выполняет эту опасную очистку.' ;;
+        awg) say 'VPN-ключи и конфигурации удаляются только отдельным пунктом 2.' ;;
+        torrserver)
+            say 'Кеш на неизвестных дисках автоматически не удаляется.' ;;
+    esac
+}
+u_keenkit_launcher() {
+    [ -L /opt/bin/keenkit ] || return 1
+    U_LINK=$(readlink /opt/bin/keenkit 2>/dev/null) || return 1
+    [ "$U_LINK" = /opt/keenkit.sh ]
+}
+u_remove_keenkit() {
+    if [ -f /opt/keenkit.sh ]; then
+        rm -f /opt/keenkit.sh || return 1
+    fi
+    if u_keenkit_launcher; then
+        rm -f /opt/bin/keenkit || return 1
+    elif [ -e /opt/bin/keenkit ] || [ -L /opt/bin/keenkit ]; then
+        say 'Неизвестная команда /opt/bin/keenkit оставлена (назначение не совпадает).'
+    fi
+    say 'KeenKit: файлы скрипта удалены, другие установленные им программы сохранены.'
+}
+u_remove_nfqws_menu() {
+    rm -f /opt/nfqws-menu.sh || return 1
+    say 'Скрипт nfqws-menu удалён. Стратегии и установленные пакеты nfqws сохранены.'
+}
+# Disable only the two exact watchdog cron entries. Other Cron jobs are
+# untouched. Unknown watchdog entries prevent unsafe partial removal.
+u_disable_watchdog() {
+    if [ -f /opt/etc/crontab ]; then
+        U_CRON_A='* * * * * root /opt/bin/torr_watchdog.sh'
+        U_CRON_B='* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh'
+        if awk -v a="$U_CRON_A" -v b="$U_CRON_B" \
+            'index($0,"/opt/bin/torr_watchdog.sh") && $0!=a && $0!=b {found=1}
+             END{exit !found}' /opt/etc/crontab; then
+            err 'В Cron есть нестандартные задания watchdog. Нужна ручная проверка.'
+            return 1
+        fi
+        ensure_mktemp || return 1
+        mkdir -p /opt/var/backups/keenutils || return 1
+        U_CRON_BACKUP=$(mktemp /opt/var/backups/keenutils/crontab-before-remove.XXXXXX) ||
+            return 1
+        cp -p /opt/etc/crontab "$U_CRON_BACKUP" ||
+            { err 'Не удалось сохранить резервную копию Cron.'; return 1; }
+        U_CRON_TMP=$(mktemp /opt/etc/.keenutils-cron.XXXXXX) || return 1
+        if ! awk -v a="$U_CRON_A" -v b="$U_CRON_B" \
+            '$0!=a && $0!=b {print}' /opt/etc/crontab > "$U_CRON_TMP"; then
+            rm -f "$U_CRON_TMP"
+            return 1
+        fi
+        if ! cat "$U_CRON_TMP" > /opt/etc/crontab; then
+            cp -p "$U_CRON_BACKUP" /opt/etc/crontab || :
+            rm -f "$U_CRON_TMP"
+            err 'Не удалось обновить Cron; использована резервная копия.'
+            return 1
+        fi
+        rm -f "$U_CRON_TMP"
+        say "Резервная копия Cron: $U_CRON_BACKUP"
+    fi
+    if [ -e /opt/bin/torr_watchdog.sh ] || [ -L /opt/bin/torr_watchdog.sh ]; then
+        rm -f /opt/bin/torr_watchdog.sh || return 1
+    fi
+    say 'Watchdog и его штатные задания Cron удалены.'
+}
+u_remove() {
+    U_REMOVE_ID=$1
+    u_detect "$U_REMOVE_ID"
+    if [ "$U_INSTALLED" -eq 0 ]; then
+        say 'Программа как установленная не обнаружена. Проверьте пункт 2 (остатки).'
+        return 0
+    fi
+    say "Выбрано удаление: $(u_label "$U_REMOVE_ID")"
+    case "$U_REMOVE_ID" in
+        nfqws|nfqws2)
+            say 'Авторский postrm предложит удалить списки и конфигурацию (y/N).'
+            say 'При ответе y будет удалён ВЕСЬ каталог настроек.'
+            ;;
+        hydra)
+            say 'Стандартное удаление hrweb/hrneo через opkg.'
+            say 'Опасный полный hr-uninstall.sh запускаться НЕ будет.'
+            ;;
+        awg) say 'Конфигурация и VPN-ключи останутся до отдельной очистки.' ;;
+        torrserver)
+            if u_watchdog_present; then
+                say 'Для удаления TorrServer сначала необходимо отключить его watchdog.'
+                say 'Будут удалены только скрипт watchdog и две штатные строки Cron.'
+                ask_yes 'Отключить watchdog для удаления TorrServer?' no || return 0
+            fi ;;
+    esac
+    ask_yes "Продолжить удаление $(u_label "$U_REMOVE_ID")?" no || return 0
+    case "$U_REMOVE_ID" in
+        nfqws) opkg remove --autoremove nfqws-keenetic || return 1 ;;
+        nfqws2) opkg remove --autoremove nfqws2-keenetic || return 1 ;;
+        nfqws-web) opkg remove --autoremove nfqws-keenetic-web || return 1 ;;
+        nfqws-menu) u_remove_nfqws_menu || return 1 ;;
+        keenkit) u_remove_keenkit || return 1 ;;
+        hydra)
+            # Official standard removal. Remove UI before its backend; do not
+            # invoke the upstream full cleanup that removes unrelated packages.
+            if pkg_installed hrweb; then opkg remove hrweb || return 1; fi
+            if pkg_installed hrneo; then opkg remove hrneo || return 1; fi
+            ;;
+        awg) opkg remove awg-manager || return 1 ;;
+        torr-watchdog) u_disable_watchdog || return 1 ;;
+        torrserver)
+            if u_watchdog_present; then u_disable_watchdog || return 1; fi
+            if torr_service; then
+                "$TORR_INIT" stop ||
+                    say 'Служба не подтвердила остановку. Проверьте процессы после удаления.'
+            fi
+            opkg remove torrserver || {
+                err 'Не удалось удалить TorrServer. Watchdog оставлен выключенным.'
+                return 1
+            }
+            ;;
+    esac
+    u_detect "$U_REMOVE_ID"
+    if [ "$U_INSTALLED" -eq 1 ]; then
+        err 'Удаление не подтверждено: программа по-прежнему обнаруживается.'
+        return 1
+    fi
+    say 'Штатное удаление завершено. Для проверки остатков используйте пункт 2.'
+}
+u_cleanup_guard() {
+    # Extra safety if opkg metadata is broken but a service is still present.
+    case "$1" in
+        nfqws)
+            if [ -x /opt/etc/init.d/S51nfqws ]; then
+                err 'Найдена служба nfqws: нельзя очищать её конфигурацию.'
+                return 1
+            fi ;;
+        nfqws2)
+            if [ -x /opt/etc/init.d/S51nfqws2 ]; then
+                err 'Найдена служба nfqws2: нельзя очищать её конфигурацию.'
+                return 1
+            fi ;;
+        hydra)
+            if [ -x /opt/etc/init.d/S99hrneo ]; then
+                err 'Найдена служба HydraRoute: очистка заблокирована.'
+                return 1
+            fi ;;
+        awg)
+            if [ -x /opt/etc/init.d/S99awg-manager ]; then
+                err 'Найдена служба AWG Manager: очистка заблокирована.'
+                return 1
+            fi ;;
+    esac
+    return 0
+}
+u_cleanup() {
+    U_CLEAN_ID=$1
+    u_detect "$U_CLEAN_ID"
+    if [ "$U_INSTALLED" -eq 1 ]; then
+        err 'Сначала удалите программу (пункт 1); чистить файлы действующей программы нельзя.'
+        return 1
+    fi
+    u_cleanup_guard "$U_CLEAN_ID" || return 1
+    if [ "$U_LEFT" -eq 0 ]; then
+        say 'Известных остатков не обнаружено.'
+        return 0
+    fi
+    U_CLEAN_PATHS=''
+    for U_CP in $(u_paths "$U_CLEAN_ID"); do
+        if [ -e "$U_CP" ] || [ -L "$U_CP" ]; then
+            if [ "$U_CLEAN_ID" = keenkit ] && [ "$U_CP" = /opt/bin/keenkit ] &&
+                ! u_keenkit_launcher; then
+                say 'Неизвестный /opt/bin/keenkit пропущен (ссылка не на официальный скрипт).'
+                continue
+            fi
+            U_CLEAN_PATHS="$U_CLEAN_PATHS $U_CP"
+        fi
+    done
+    if [ "$U_CLEAN_ID" = torrserver ] && u_watchdog_present; then
+        say 'Обнаружен watchdog. Отключить его можно в «Связанные программы».'
+    fi
+    if [ -z "$U_CLEAN_PATHS" ]; then
+        say 'Безопасных для автоматической очистки файлов не обнаружено.'
+        return 0
+    fi
+    say 'Будут БЕЗВОЗВРАТНО удалены только следующие пути:'
+    for U_CP in $U_CLEAN_PATHS; do say "  $U_CP"; done
+    if [ "$U_CLEAN_ID" = awg ]; then
+        say 'ВНИМАНИЕ: каталог содержит VPN-ключи и настройки!'
+    fi
+    if [ "$U_CLEAN_ID" = torrserver ]; then
+        say 'ВНИМАНИЕ: может быть удалён кеш торрентов на подключённом накопителе!'
+        if have pgrep && pgrep -x torrserver >/dev/null 2>&1; then
+            err 'TorrServer ещё запущен; сначала остановите службу.'
+            return 1
+        fi
+    fi
+    ask_yes 'Безвозвратно удалить перечисленные остатки?' no || return 0
+    for U_CP in $U_CLEAN_PATHS; do
+        rm -rf "$U_CP" || { err "Не удалось удалить $U_CP"; return 1; }
+        say "Удалено: $U_CP"
+    done
+}
+u_linked() {
+    U_JUMP=''
+    case "$1" in
+        nfqws|nfqws2) U_REL_IDS='nfqws-web nfqws-menu' ;;
+        nfqws-web|nfqws-menu) U_REL_IDS='nfqws nfqws2 nfqws-web' ;;
+        torrserver) U_REL_IDS='torr-watchdog' ;;
+        torr-watchdog) U_REL_IDS='torrserver' ;;
+        *) U_REL_IDS='' ;;
+    esac
+    U_REL_SHOW=''
+    U_REL_COUNT=0
+    say 'Связанные программы (удаляются только отдельно):'
+    for U_REL_ID in $U_REL_IDS; do
+        [ "$U_REL_ID" = "$1" ] && continue
+        u_detect "$U_REL_ID"
+        if [ "$U_INSTALLED" -eq 1 ] || [ "$U_LEFT" -eq 1 ]; then
+            U_REL_COUNT=$((U_REL_COUNT + 1))
+            say " $U_REL_COUNT. $(u_label "$U_REL_ID")"
+            U_REL_SHOW="$U_REL_SHOW $U_REL_ID"
+        fi
+    done
+    if [ "$1" = hydra ]; then
+        say 'hrweb входит в тот же набор HydraRoute; остальные зависимости общие.'
+    fi
+    if [ "$U_REL_COUNT" -eq 0 ]; then
+        say 'Связанных программ из списка KeenUtils не обнаружено.'
+        return 0
+    fi
+    say ' 0. Назад'
+    printf 'Выберите программу для управления: '
+    IFS= read -r U_REL_SELECTION || return 0
+    case "$U_REL_SELECTION" in ''|0|00) return 0 ;; esac
+    U_I=0
+    for U_REL_ID in $U_REL_SHOW; do
+        U_I=$((U_I + 1))
+        if [ "$U_REL_SELECTION" = "$U_I" ]; then
+            U_JUMP=$U_REL_ID
+            return 0
+        fi
+    done
+    say 'Неизвестный пункт.'
+}
+u_detail_menu() {
+    U_DETAIL_ID=$1
+    while :; do
+        u_detect "$U_DETAIL_ID"
+        printf '\033[2J\033[H'
+        say '============================================='
+        say "       $(u_label "$U_DETAIL_ID") | Удаление"
+        say '============================================='
+        if [ "$U_INSTALLED" -eq 1 ]; then
+            say 'Статус: установлен'
+        elif [ "$U_LEFT" -eq 1 ]; then
+            say 'Статус: удалён, остались файлы'
+        else
+            say 'Статус: не обнаружен'
+        fi
+        say ' 1. Удалить программу'
+        say ' 2. Найти и удалить остатки файлов'
+        say ' 3. Связанные программы'
+        say ' 4. Проверить состояние'
+        say ''
+        say ' 0. Назад'
+        say '---------------------------------------------'
+        printf 'Выберите действие: '
+        IFS= read -r U_ACTION || return 0
+        case "$U_ACTION" in
+            1|01) u_remove "$U_DETAIL_ID" ;;
+            2|02) u_cleanup "$U_DETAIL_ID" ;;
+            3|03)
+                u_linked "$U_DETAIL_ID"
+                if [ -n "$U_JUMP" ]; then
+                    U_DETAIL_ID=$U_JUMP
+                    continue
+                fi
+                ;;
+            4|04) u_show_status "$U_DETAIL_ID" ;;
+            0|00) return 0 ;;
+            *) say 'Неизвестный пункт.' ;;
+        esac
+        pause_menu
+    done
+}
+uninstall_menu() {
+    while :; do
+        printf '\033[2J\033[H'
+        say '============================================='
+        say '          Удаление программ'
+        say '============================================='
+        U_LIST=''
+        U_COUNT=0
+        for U_SCAN_ID in nfqws nfqws2 nfqws-web nfqws-menu \
+                         keenkit hydra awg torrserver torr-watchdog; do
+            u_detect "$U_SCAN_ID"
+            if [ "$U_INSTALLED" -eq 1 ] || [ "$U_LEFT" -eq 1 ]; then
+                U_COUNT=$((U_COUNT + 1))
+                if [ "$U_INSTALLED" -eq 1 ]; then
+                    U_STATE='Установлен'
+                else
+                    U_STATE='Остались файлы'
+                fi
+                say " $U_COUNT. $(u_label "$U_SCAN_ID") [$U_STATE]"
+                U_LIST="$U_LIST $U_SCAN_ID"
+            fi
+        done
+        if [ "$U_COUNT" -eq 0 ]; then
+            say 'Установленные программы и известные остатки не найдены.'
+        fi
+        say ''
+        say ' 0. Назад в главное меню'
+        say '---------------------------------------------'
+        printf 'Выберите действие: '
+        IFS= read -r U_PICK || return 0
+        case "$U_PICK" in ''|0|00) return 0 ;; esac
+        U_I=0
+        U_TARGET=''
+        for U_SCAN_ID in $U_LIST; do
+            U_I=$((U_I + 1))
+            if [ "$U_PICK" = "$U_I" ]; then
+                U_TARGET=$U_SCAN_ID
+                break
+            fi
+        done
+        if [ -n "$U_TARGET" ]; then
+            u_detail_menu "$U_TARGET"
+        else
+            say 'Неизвестный пункт.'
+            pause_menu
+        fi
+    done
+}
+
 # Menu 99 lists user-facing apps rather than every opkg library or dependency.
 # opkg metadata does not reliably prove who initiated each historical install.
 show_packages() {
@@ -860,6 +1307,7 @@ menu() {
     say '  7. AWG Manager'
     say '  8. TorrServer'
     say ''
+    say ' 77. Удаление программ'
     say ' 88. Обновить KeenUtils'
     say ' 99. Установленные приложения Entware'
     say ' 00. Выход'
@@ -878,6 +1326,7 @@ while :; do
         6|06) install_hydra ;;
         7|07) install_awg ;;
         8|08) torrserver_menu; continue ;;
+        77) uninstall_menu; continue ;;
         88) update_keenutils
             if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
                 say 'Нажмите Enter, чтобы открыть обновлённое меню.'
