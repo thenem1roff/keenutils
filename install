@@ -1046,6 +1046,32 @@ u_remove() {
     fi
     say 'Штатное удаление завершено. Для проверки остатков используйте пункт 2.'
 }
+u_cleanup_guard() {
+    # Extra safety if opkg metadata is broken but a service is still present.
+    case "$1" in
+        nfqws)
+            if [ -x /opt/etc/init.d/S51nfqws ]; then
+                err 'Найдена служба nfqws: нельзя очищать её конфигурацию.'
+                return 1
+            fi ;;
+        nfqws2)
+            if [ -x /opt/etc/init.d/S51nfqws2 ]; then
+                err 'Найдена служба nfqws2: нельзя очищать её конфигурацию.'
+                return 1
+            fi ;;
+        hydra)
+            if [ -x /opt/etc/init.d/S99hrneo ]; then
+                err 'Найдена служба HydraRoute: очистка заблокирована.'
+                return 1
+            fi ;;
+        awg)
+            if [ -x /opt/etc/init.d/S99awg-manager ]; then
+                err 'Найдена служба AWG Manager: очистка заблокирована.'
+                return 1
+            fi ;;
+    esac
+    return 0
+}
 u_cleanup() {
     U_CLEAN_ID=$1
     u_detect "$U_CLEAN_ID"
@@ -1053,6 +1079,7 @@ u_cleanup() {
         err 'Сначала удалите программу (пункт 1); чистить файлы действующей программы нельзя.'
         return 1
     fi
+    u_cleanup_guard "$U_CLEAN_ID" || return 1
     if [ "$U_LEFT" -eq 0 ]; then
         say 'Известных остатков не обнаружено.'
         return 0
