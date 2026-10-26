@@ -10,6 +10,7 @@ on:
       - tests/installer-regressions.sh
       - tests/uninstall-regressions.sh
       - tests/header-regressions.sh
+      - tests/menu-navigation-regressions.sh
       - tests/torr-cache-regression.sh
       - .github/workflows/installer-check.yml
   pull_request:
@@ -45,7 +46,7 @@ jobs:
           printf '00\n' |
             script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-command.log
           grep -q 'Выход.' /tmp/keenutils-command.log
-          grep -q '88. Обновить KeenUtils' /tmp/keenutils-command.log
+          grep -q '99. Обновить KeenUtils' /tmp/keenutils-command.log
       - name: KeenUtils self-update and no-op update
         run: |
           set -eu
@@ -57,15 +58,15 @@ jobs:
           cp /tmp/keenutils-ci-source "$3"
           MOCK_WGET
           sudo chmod 755 /opt/bin/wget
-          # Choose 88, accept default Yes, Enter to restart, then 00 exits.
-          printf '88\n\n\n00\n' |
+          # Choose 99, accept default Yes, Enter to restart, then 00 exits.
+          printf '99\n\n\n00\n' |
             script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-updated.log
           grep -q 'KeenUtils успешно обновлён' /tmp/keenutils-updated.log
           grep -q 'Выход.' /tmp/keenutils-updated.log
           cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
           grep -q 'old-version-for-test' /opt/bin/keenutils.backup
           # Running the same update again must not rewrite the installation.
-          printf '88\n\n\n00\n' |
+          printf '99\n\n\n00\n' |
             script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-noop.log
           grep -q 'уже актуален' /tmp/keenutils-noop.log
           grep -q 'Выход.' /tmp/keenutils-noop.log
@@ -124,3 +125,5 @@ jobs:
         run: sudo sh tests/uninstall-regressions.sh
       - name: Compact header and update check regressions
         run: sudo sh tests/header-regressions.sh
+      - name: Enter exits/back from each menu
+        run: sudo sh tests/menu-navigation-regressions.sh
