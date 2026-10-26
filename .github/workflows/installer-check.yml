@@ -9,6 +9,7 @@ on:
       - tests/sources-regression.sh
       - tests/installer-regressions.sh
       - tests/uninstall-regressions.sh
+      - tests/header-regressions.sh
       - tests/torr-cache-regression.sh
       - .github/workflows/installer-check.yml
   pull_request:
@@ -22,6 +23,8 @@ on:
 jobs:
   shell:
     runs-on: ubuntu-latest
+    env:
+      KEENUTILS_DISABLE_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
       - name: POSIX shell syntax
@@ -119,3 +122,5 @@ jobs:
         run: sudo sh tests/sources-regression.sh
       - name: Uninstall menu safety and regression tests
         run: sudo sh tests/uninstall-regressions.sh
+      - name: Compact header and update check regressions
+        run: sudo sh tests/header-regressions.sh
