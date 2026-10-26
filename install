@@ -111,7 +111,7 @@ ensure_ssl_wget() {
     install_pkg wget-ssl
 }
 # Install the downloaded installer once so it can be launched as "keenutils".
-# Do not silently replace an existing installation; menu item 88 does updates.
+# Do not silently replace an existing installation; menu item 99 does updates.
 KEENUTILS_BIN=/opt/bin/keenutils
 valid_keenutils() {
     [ -s "$1" ] && sh -n "$1" >/dev/null 2>&1 &&
@@ -131,7 +131,7 @@ bootstrap_keenutils() {
     if [ -e "$KEENUTILS_BIN" ] || [ -L "$KEENUTILS_BIN" ]; then
         valid_keenutils "$KEENUTILS_BIN" ||
             { err "Путь $KEENUTILS_BIN занят другим или повреждённым файлом. Не перезаписываю."; return 1; }
-        say 'KeenUtils уже установлен. Для обновления выберите пункт 88.'
+        say 'KeenUtils уже установлен. Для обновления выберите пункт 99.'
         exec "$KEENUTILS_BIN"
     fi
     case "$0" in
@@ -164,7 +164,7 @@ bootstrap_keenutils() {
 }
 bootstrap_keenutils || exit 1
 
-# Menu item 88: download, validate and atomically replace the installed script.
+# Menu item 99: download, validate and atomically replace the installed script.
 # Never update packages or the other utilities as a side effect.
 KEENUTILS_UPDATED=0
 update_keenutils() {
@@ -799,13 +799,13 @@ torrserver_menu() {
             2|02) update_torrserver ;;
             3|03) install_watchdog ;;
             4|04) setup_torr_cache ;;
-            0|00) return 0 ;;
+            ''|0|00) return 0 ;;
             *) say 'Неизвестный пункт меню.' ;;
         esac
         pause_menu
     done
 }
-# Menu 77: removal is explicit, offline, and independent of installation.
+# Menu 88: removal is explicit, offline, and independent of installation.
 # No generic "rm dependencies": only known application-specific paths can
 # be cleaned, and only after the owning package has been uninstalled.
 u_label() {
@@ -1197,7 +1197,7 @@ u_detail_menu() {
                 fi
                 ;;
             4|04) u_show_status "$U_DETAIL_ID" ;;
-            0|00) return 0 ;;
+            ''|0|00) return 0 ;;
             *) say 'Неизвестный пункт.' ;;
         esac
         pause_menu
@@ -1365,7 +1365,7 @@ menu() {
     show_installed_header
     if [ "$KEENUTILS_UPDATE_STATE" = available ]; then
         say '----------------------------------------'
-        printf '%s%s%s\n' "$UI_YELLOW" 'Доступно обновление KeenUtils → 88' "$UI_RESET"
+        printf '%s%s%s\n' "$UI_YELLOW" 'Доступно обновление KeenUtils → 99' "$UI_RESET"
     fi
     say '----------------------------------------'
     say '  1. nfqws'
@@ -1377,8 +1377,8 @@ menu() {
     say '  7. AWG Manager'
     say '  8. TorrServer'
     say ''
-    say ' 77. Удаление программ'
-    say ' 88. Обновить KeenUtils'
+    say ' 88. Удаление программ'
+    say ' 99. Обновить KeenUtils'
     say ' 00. Выход'
     say '----------------------------------------'
     printf 'Выберите действие: '
@@ -1397,15 +1397,15 @@ while :; do
         6|06) install_hydra ;;
         7|07) install_awg ;;
         8|08) torrserver_menu; continue ;;
-        77) uninstall_menu; continue ;;
-        88) update_keenutils
+        88) uninstall_menu; continue ;;
+        99) update_keenutils
             if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
                 say 'Нажмите Enter, чтобы открыть обновлённое меню.'
                 IFS= read -r _restart || :
                 exec "$KEENUTILS_BIN"
             fi
             ;;
-        00|0) say 'Выход.'; break ;;
+        ''|00|0) say 'Выход.'; break ;;
         *) say 'Неизвестный пункт меню.' ;;
     esac
     pause_menu
