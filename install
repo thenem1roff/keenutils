@@ -1279,6 +1279,13 @@ uninstall_keenutils() {
             say 'В /opt/etc/keenutils остались другие файлы: каталог сохранён.'
         fi
     fi
+    # Only remove the shared backup DIRECTORY when already empty.
+    # Never erase TorrServer or Cron backups stored inside it.
+    if [ -d /opt/var/backups/keenutils ]; then
+        if ! rmdir /opt/var/backups/keenutils 2>/dev/null; then
+            say 'Резервные копии других настроек сохранены в /opt/var/backups/keenutils/.'
+        fi
+    fi
     if [ -n "$KU_TEMP_INSTALL" ]; then
         rm -f "$KU_TEMP_INSTALL" ||
             { err 'Не удалось удалить временный установщик.'; return 1; }
