@@ -10,6 +10,7 @@ on:
       - tests/installer-regressions.sh
       - tests/uninstall-regressions.sh
       - tests/header-regressions.sh
+      - tests/menu-navigation-regressions.sh
       - tests/torr-cache-regression.sh
       - .github/workflows/installer-check.yml
   pull_request:
@@ -124,3 +125,5 @@ jobs:
         run: sudo sh tests/uninstall-regressions.sh
       - name: Compact header and update check regressions
         run: sudo sh tests/header-regressions.sh
+      - name: Enter exits/back from each menu
+        run: sudo sh tests/menu-navigation-regressions.sh
