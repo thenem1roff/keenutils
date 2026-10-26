@@ -29,7 +29,7 @@ printf 'nfqws2-keenetic\n' >/tmp/keenutils-uninstall-pkgs
 : >/tmp/keenutils-uninstall-log
 printf 'CUSTOM CONFIG TO KEEP\n' >/opt/etc/nfqws2/nfqws2.conf
 printf 'feed\n' >/opt/etc/opkg/nfqws2-keenetic.conf
-rm -f /opt/nfqws-menu.sh /opt/keenkit.sh /opt/bin/keenkit \
+rm -f /opt/etc/opkg/nfqws-keenetic-web.conf /opt/nfqws-menu.sh /opt/keenkit.sh /opt/bin/keenkit \
     /opt/bin/torr_watchdog.sh /opt/sbin/torrserver
 # Scanned list contains only nfqws2; cancelled removal must leave it unchanged.
 printf '77\n1\n1\nn\n\n0\n0\n00\n' |
