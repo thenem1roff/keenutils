@@ -1203,6 +1203,94 @@ u_detail_menu() {
         pause_menu
     done
 }
+# Self-uninstall removes only KeenUtils-owned installed files.
+# Cron, opkg packages, other utilities and their backups are never modified.
+# Running a shell script on Linux can safely unlink its own script file;
+# the already-open shell continues through the final exit and EXIT trap.
+uninstall_keenutils() {
+    if [ -L "$KEENUTILS_BIN" ] || ! [ -f "$KEENUTILS_BIN" ] ||
+       ! valid_keenutils "$KEENUTILS_BIN"; then
+        err 'Установленный KeenUtils не подтверждён; автоматическое удаление отменено.'
+        return 1
+    fi
+    # Refuse to follow unusual links or remove a foreign backup.
+    if [ -L /opt/etc/keenutils ] ||
+       [ -L /opt/etc/keenutils/sources.conf ] ||
+       [ -L /opt/bin/keenutils.backup ]; then
+        err 'Обнаружены нестандартные символьные ссылки в файлах KeenUtils.'
+        err 'Удаление остановлено, чтобы не затронуть чужие данные.'
+        return 1
+    fi
+    if [ -e /opt/bin/keenutils.backup ] &&
+       ! valid_keenutils /opt/bin/keenutils.backup; then
+        err 'Резервная копия /opt/bin/keenutils.backup не похожа на KeenUtils.'
+        err 'Не удаляю неизвестный файл.'
+        return 1
+    fi
+    if [ -e /opt/etc/keenutils/sources.conf ] &&
+       ! [ -f /opt/etc/keenutils/sources.conf ]; then
+        err 'Неизвестный тип файла sources.conf: удаление остановлено.'
+        return 1
+    fi
+    KU_TEMP_INSTALL=''
+    if [ -f /tmp/keenutils-install.sh ] &&
+       [ ! -L /tmp/keenutils-install.sh ] &&
+       valid_keenutils /tmp/keenutils-install.sh; then
+        KU_TEMP_INSTALL=/tmp/keenutils-install.sh
+    fi
+    say '============================================='
+    say '          Полное удаление KeenUtils'
+    say '============================================='
+    say 'Будут удалены только собственные файлы KeenUtils:'
+    say "  $KEENUTILS_BIN"
+    if [ -f /opt/bin/keenutils.backup ]; then
+        say '  /opt/bin/keenutils.backup'
+    fi
+    if [ -f /opt/etc/keenutils/sources.conf ]; then
+        say '  /opt/etc/keenutils/sources.conf'
+    fi
+    if [ -n "$KU_TEMP_INSTALL" ]; then
+        say "  $KU_TEMP_INSTALL"
+    fi
+    say '  /opt/etc/keenutils/ (только если каталог пуст)'
+    say ''
+    say 'Будут СОХРАНЕНЫ:'
+    say '  Все установленные программы, настройки, Cron и watchdog.'
+    say '  /opt/var/backups/keenutils/ — копии настроек TorrServer и Cron.'
+    say ''
+    say 'История терминала, системные журналы, снимки диска и удалённые'
+    say 'данные не затрагиваются. Отсутствие исторических следов не гарантируется.'
+    say ''
+    ask_yes 'Удалить KeenUtils и закрыть меню?' no || {
+        say 'Удаление отменено.'
+        return 0
+    }
+    # Remove app-owned auxiliary files first. No glob-based or recursive deletion.
+    if [ -f /opt/bin/keenutils.backup ]; then
+        rm -f /opt/bin/keenutils.backup ||
+            { err 'Не удалось удалить резервную копию KeenUtils.'; return 1; }
+    fi
+    if [ -f /opt/etc/keenutils/sources.conf ]; then
+        rm -f /opt/etc/keenutils/sources.conf ||
+            { err 'Не удалось удалить каталог источников KeenUtils.'; return 1; }
+    fi
+    if [ -d /opt/etc/keenutils ]; then
+        if ! rmdir /opt/etc/keenutils 2>/dev/null; then
+            say 'В /opt/etc/keenutils остались другие файлы: каталог сохранён.'
+        fi
+    fi
+    if [ -n "$KU_TEMP_INSTALL" ]; then
+        rm -f "$KU_TEMP_INSTALL" ||
+            { err 'Не удалось удалить временный установщик.'; return 1; }
+    fi
+    rm -f "$KEENUTILS_BIN" || {
+        err 'Не удалось удалить /opt/bin/keenutils. Удаление неполное.'
+        return 1
+    }
+    say 'KeenUtils удалён. Остальные программы и их данные не изменены.'
+    say 'Работа меню завершена.'
+    exit 0
+}
 uninstall_menu() {
     while :; do
         printf '\033[2J\033[H'
@@ -1225,6 +1313,11 @@ uninstall_menu() {
                 U_LIST="$U_LIST $U_SCAN_ID"
             fi
         done
+        if [ -f "$KEENUTILS_BIN" ] && valid_keenutils "$KEENUTILS_BIN"; then
+            U_COUNT=$((U_COUNT + 1))
+            say " $U_COUNT. KeenUtils [Установлен]"
+            U_LIST="$U_LIST keenutils"
+        fi
         if [ "$U_COUNT" -eq 0 ]; then
             say 'Установленные программы и известные остатки не найдены.'
         fi
@@ -1244,7 +1337,11 @@ uninstall_menu() {
             fi
         done
         if [ -n "$U_TARGET" ]; then
-            u_detail_menu "$U_TARGET"
+            if [ "$U_TARGET" = keenutils ]; then
+                uninstall_keenutils
+            else
+                u_detail_menu "$U_TARGET"
+            fi
         else
             say 'Неизвестный пункт.'
             pause_menu
