@@ -52,7 +52,7 @@ printf '4 3 * * * root echo keep\n' >/opt/etc/crontab
 
 # Installed local file differs from remote; indicator survives submenu redraw.
 printf '# prior version\n' >>/opt/bin/keenutils
-printf '77\n0\n00\n' |
+printf '88\n0\n00\n' |
   script -q -c 'KEENUTILS_DISABLE_UPDATE_CHECK=0 NO_COLOR=1 sh /opt/bin/keenutils' \
     /dev/null >/tmp/keenutils-header-outdated.log
 grep -Fq 'Keenetic Giga (KN-1012) |' /tmp/keenutils-header-outdated.log
@@ -61,7 +61,7 @@ grep -Fq 'nfqws-web' /tmp/keenutils-header-outdated.log
 grep -Fq 'AWG Manager' /tmp/keenutils-header-outdated.log
 grep -Fq 'Доступно обновление KeenUtils' /tmp/keenutils-header-outdated.log
 test "$(wc -l </tmp/keenutils-header-network-count)" = 1
-! grep -Fq ' 99.' /tmp/keenutils-header-outdated.log
+grep -Fq ' 99. Обновить KeenUtils' /tmp/keenutils-header-outdated.log
 
 # Same bytes: no update notification.
 cp ./install /opt/bin/keenutils
@@ -76,13 +76,13 @@ printf '# prior version\n' >> /opt/bin/keenutils
 printf '00\n' |
   script -q -c 'KEENUTILS_DISABLE_UPDATE_CHECK=0 KEENUTILS_TEST_OFFLINE=1 NO_COLOR=1 sh /opt/bin/keenutils' \
     /dev/null >/tmp/keenutils-header-offline.log
-grep -Fq ' 77. Удаление программ' /tmp/keenutils-header-offline.log
+grep -Fq ' 88. Удаление программ' /tmp/keenutils-header-offline.log
 ! grep -Fq 'Доступно обновление KeenUtils' /tmp/keenutils-header-offline.log
 test "$(wc -l </tmp/keenutils-header-network-count)" = 3
 
 # A package removal must be reflected in the next header without another
 # remote check. The first detected app in menu 77 is nfqws2.
-printf '77\n1\n1\ny\n\n0\n0\n00\n' |
+printf '88\n1\n1\ny\n\n0\n0\n00\n' |
   script -q -c 'KEENUTILS_DISABLE_UPDATE_CHECK=0 KEENUTILS_TEST_OFFLINE=1 NO_COLOR=1 sh /opt/bin/keenutils' \
     /dev/null >/tmp/keenutils-header-refresh.log
 test "$(wc -l </tmp/keenutils-header-network-count)" = 4
