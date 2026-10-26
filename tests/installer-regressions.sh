@@ -53,11 +53,13 @@ printf '3\n\n00\n' |
     script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-web-check.log
 ! grep -Fq 'Внимание: сначала рекомендуется установить nfqws' /tmp/keenutils-web-check.log
 
-# 99 excludes libc, libopenssl, ca-certificates, grep and other support packages.
-printf '99\n\n00\n' |
+# The header lists recognised user-facing apps, not system packages.
+printf '00\n' |
     script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-app-list.log
-grep -Fq '  nfqws2-keenetic' /tmp/keenutils-app-list.log
-grep -Fq '  torrserver' /tmp/keenutils-app-list.log
-! grep -Eq '^  (libc|libopenssl|ca-certificates|grep)( |$)' /tmp/keenutils-app-list.log
+grep -Fq 'Установлены:' /tmp/keenutils-app-list.log
+grep -Fq 'nfqws2' /tmp/keenutils-app-list.log
+grep -Fq 'TorrServer' /tmp/keenutils-app-list.log
+! grep -Fq ' 99. Установленные приложения Entware' /tmp/keenutils-app-list.log
+! grep -Eq '  (libc|libopenssl|ca-certificates|grep)  ·' /tmp/keenutils-app-list.log
 
 printf 'Entware user-status and menu regression tests passed.\n'

@@ -1252,52 +1252,122 @@ uninstall_menu() {
     done
 }
 
-# Menu 99 lists user-facing apps rather than every opkg library or dependency.
-# opkg metadata does not reliably prove who initiated each historical install.
-show_packages() {
-    say 'Установленные приложения Entware (без системных библиотек):'
-    count=0
-    for app in \
-        nfqws-keenetic nfqws2-keenetic nfqws-keenetic-web \
-        hrneo hrweb awg-manager torrserver \
-        adguardhome-go smartdns sing-box xray xray-core \
-        tailscale zerotier transmission-daemon transmission-web \
-        aria2 minidlna samba4-server nginx openvpn-openssl \
-        mc htop tmux nano vim-full mosquitto iperf3 \
-        wireguard-tools qbittorrent-nox
-    do
-        if pkg_installed "$app"; then
-            say "  $app"
-            count=$((count + 1))
+# Compact status header. Local status is refreshed on each main-menu redraw.
+ROUTER_MODEL='Keenetic'
+KEENUTILS_UPDATE_STATE='unknown'
+UI_BLUE=''
+UI_GREEN=''
+UI_YELLOW=''
+UI_RESET=''
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    UI_BLUE=$(printf '\033[1;36m')
+    UI_GREEN=$(printf '\033[0;32m')
+    UI_YELLOW=$(printf '\033[1;33m')
+    UI_RESET=$(printf '\033[0m')
+fi
+router_detect_once() {
+    if have ndmc; then
+        detected_model=$(ndmc -c 'show version' 2>/dev/null |
+            awk '/^[[:space:]]*model:[[:space:]]*/ {
+                sub(/^[^:]*:[[:space:]]*/, ""); print; exit
+            }')
+        if [ -n "$detected_model" ]; then
+            case "$detected_model" in
+                Keenetic*) ROUTER_MODEL=$detected_model ;;
+                *) ROUTER_MODEL="Keenetic $detected_model" ;;
+            esac
         fi
-    done
-    if [ -s /opt/nfqws-menu.sh ]; then
-        say '  nfqws-menu (скрипт)'
-        count=$((count + 1))
     fi
-    if [ -x /opt/bin/keenkit ] && [ -f /opt/keenkit.sh ]; then
-        say '  KeenKit (скрипт)'
-        count=$((count + 1))
-    fi
-    if watchdog_complete; then
-        say '  TorrServer watchdog (скрипт)'
-        count=$((count + 1))
-    fi
-    if [ -x "$KEENUTILS_BIN" ]; then
-        say '  KeenUtils (скрипт)'
-        count=$((count + 1))
-    fi
-    [ "$count" -gt 0 ] || say '  Приложения из проверяемого списка не обнаружены.'
-    say ''
-    say 'Показаны известные приложения, а не все пакеты opkg.'
-    say 'Точно восстановить, кто устанавливал каждый пакет, по opkg нельзя.'
 }
-# EXTENSION POINT: add a menu line and one case branch calling install_*.
+# One HTTPS attempt, timeout <= 5s, only at startup; never on redraw.
+# Byte-for-byte cmp needs no sha256sum or additional package.
+check_keenutils_update_once() {
+    KEENUTILS_UPDATE_STATE='unknown'
+    [ "${KEENUTILS_DISABLE_UPDATE_CHECK:-0}" = 1 ] && return 0
+    [ -r "$KEENUTILS_BIN" ] || return 0
+    have cmp && have mktemp || return 0
+    update_probe=$(mktemp /tmp/.keenutils-check.XXXXXX) || return 0
+    TMP_FILES="$TMP_FILES $update_probe"
+    downloaded=0
+    if have curl; then
+        curl -fsSL --connect-timeout 2 --max-time 5 \
+            -o "$update_probe" "$BASE_URL/install" >/dev/null 2>&1 && downloaded=1
+    elif have wget; then
+        wget -q -T 5 -O "$update_probe" "$BASE_URL/install" >/dev/null 2>&1 &&
+            downloaded=1
+    fi
+    if [ "$downloaded" -eq 1 ] && valid_keenutils "$update_probe"; then
+        if cmp -s "$update_probe" "$KEENUTILS_BIN"; then
+            KEENUTILS_UPDATE_STATE='current'
+        else
+            KEENUTILS_UPDATE_STATE='available'
+        fi
+    fi
+    rm -f "$update_probe"
+}
+# Gather the installed package names in one opkg read per menu display.
+header_has_pkg() {
+    case "$HEADER_PACKAGE_NAMES" in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+header_add_app() {
+    if [ -z "$HEADER_LINE" ]; then
+        HEADER_LINE="  $1"
+    else
+        header_candidate="$HEADER_LINE  ·  $1"
+        header_bytes=$(printf '%s' "$header_candidate" | wc -c)
+        if [ "$header_bytes" -gt 64 ]; then
+            printf '%s%s%s\n' "$UI_GREEN" "$HEADER_LINE" "$UI_RESET"
+            HEADER_LINE="  $1"
+        else
+            HEADER_LINE=$header_candidate
+        fi
+    fi
+}
+show_installed_header() {
+    HEADER_PACKAGE_NAMES=$(opkg list-installed 2>/dev/null |
+        awk '$2 == "-" {printf " %s", $1} END {print " "}')
+    HEADER_LINE=''
+    printf '%sУстановлены:%s\n' "$UI_GREEN" "$UI_RESET"
+    header_has_pkg nfqws-keenetic && header_add_app nfqws
+    header_has_pkg nfqws2-keenetic && header_add_app nfqws2
+    header_has_pkg nfqws-keenetic-web && header_add_app nfqws-web
+    [ -s /opt/nfqws-menu.sh ] && header_add_app nfqws-menu
+    [ -f /opt/keenkit.sh ] && header_add_app KeenKit
+    if header_has_pkg hrneo || header_has_pkg hrweb; then
+        header_add_app 'HydraRoute Neo'
+    fi
+    header_has_pkg awg-manager && header_add_app 'AWG Manager'
+    if header_has_pkg torrserver || [ -x /opt/sbin/torrserver ]; then
+        if u_watchdog_present; then
+            header_add_app 'TorrServer (+ watchdog)'
+        else
+            header_add_app TorrServer
+        fi
+    elif u_watchdog_present; then
+        header_add_app 'watchdog (без TorrServer)'
+    fi
+    if [ -z "$HEADER_LINE" ]; then
+        say '  Поддерживаемые приложения не обнаружены'
+    else
+        printf '%s%s%s\n' "$UI_GREEN" "$HEADER_LINE" "$UI_RESET"
+    fi
+}
 menu() {
     printf '\033[2J\033[H'
-    say '============================================='
-    say '       KeenUtils Installer | Entware'
-    say '============================================='
+    printf '%s%s%s\n' "$UI_BLUE" '========================================' "$UI_RESET"
+    printf '%s%s%s\n' "$UI_BLUE" '         KeenUtils | Entware' "$UI_RESET"
+    printf '%s%s%s\n' "$UI_BLUE" '========================================' "$UI_RESET"
+    say "$ROUTER_MODEL | $(uname -m)"
+    say '----------------------------------------'
+    show_installed_header
+    if [ "$KEENUTILS_UPDATE_STATE" = available ]; then
+        say '----------------------------------------'
+        printf '%s%s%s\n' "$UI_YELLOW" 'Доступно обновление KeenUtils → 88' "$UI_RESET"
+    fi
+    say '----------------------------------------'
     say '  1. nfqws'
     say '  2. nfqws2'
     say '  3. nfqws-web'
@@ -1309,11 +1379,12 @@ menu() {
     say ''
     say ' 77. Удаление программ'
     say ' 88. Обновить KeenUtils'
-    say ' 99. Установленные приложения Entware'
     say ' 00. Выход'
-    say '---------------------------------------------'
+    say '----------------------------------------'
     printf 'Выберите действие: '
 }
+router_detect_once
+check_keenutils_update_once
 while :; do
     menu
     IFS= read -r choice || break
@@ -1334,7 +1405,6 @@ while :; do
                 exec "$KEENUTILS_BIN"
             fi
             ;;
-        99) show_packages ;;
         00|0) say 'Выход.'; break ;;
         *) say 'Неизвестный пункт меню.' ;;
     esac
