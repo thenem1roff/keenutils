@@ -60,6 +60,46 @@ printf '88\n1\n2\ny\n\n0\n0\n00\n' |
 [ ! -e /opt/etc/opkg/nfqws2-keenetic.conf ]
 grep -Fq 'Удалено: /opt/etc/nfqws2' /tmp/u-clean-residue.log
 
+# nfqws-menu creates /opt/bin/menu pointing to its own script. Uninstall
+# must not leave a dangling launcher or touch unrelated files in /opt/bin.
+printf '#!/bin/sh\nexit 0\n' >/opt/nfqws-menu.sh
+mkdir -p /opt/etc/nfqws-menu
+printf 'cache\n' >/opt/etc/nfqws-menu/example
+printf 'ru\n' >/opt/etc/nfqws-menu.lang
+printf 'keep\n' >/opt/bin/keenutils-neighbor-test
+rm -f /opt/bin/menu
+ln -s /opt/nfqws-menu.sh /opt/bin/menu
+printf '88\n1\n1\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-nfqws-menu-delete.log
+[ ! -e /opt/nfqws-menu.sh ]
+[ ! -L /opt/bin/menu ]
+[ -s /opt/etc/nfqws-menu/example ]
+[ -s /opt/etc/nfqws-menu.lang ]
+grep -Fxq keep /opt/bin/keenutils-neighbor-test
+grep -Fq 'штатная команда menu удалены' /tmp/u-nfqws-menu-delete.log
+
+# Older KeenUtils versions left a dangling /opt/bin/menu behind. It must
+# appear as residue and be removable via option 2 with confirmation.
+ln -s /opt/nfqws-menu.sh /opt/bin/menu
+printf '88\n1\n2\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-nfqws-menu-clean.log
+grep -Fq 'Удалено: /opt/bin/menu' /tmp/u-nfqws-menu-clean.log
+[ ! -L /opt/bin/menu ]
+[ ! -e /opt/etc/nfqws-menu ]
+[ ! -e /opt/etc/nfqws-menu.lang ]
+grep -Fxq keep /opt/bin/keenutils-neighbor-test
+
+# A foreign launcher using the same name must survive nfqws-menu removal.
+printf '#!/bin/sh\nexit 0\n' >/opt/nfqws-menu.sh
+ln -s /opt/unrelated-menu.sh /opt/bin/menu
+printf '88\n1\n1\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-nfqws-menu-foreign.log
+[ ! -e /opt/nfqws-menu.sh ]
+[ -L /opt/bin/menu ]
+[ "$(readlink /opt/bin/menu)" = /opt/unrelated-menu.sh ]
+grep -Fxq keep /opt/bin/keenutils-neighbor-test
+rm -f /opt/bin/menu /opt/bin/keenutils-neighbor-test
+
 # Two known watchdog Cron entries can be removed; unrelated entries survive.
 printf 'torrserver\n' >/tmp/keenutils-uninstall-pkgs
 printf '#!/bin/sh\nexit 0\n' >/opt/sbin/torrserver
