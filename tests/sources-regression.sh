@@ -1,6 +1,6 @@
 #!/bin/sh
 # Source allowlist, cached fallback and delegated upstream menu smoke tests.
-set -eux
+set -eu
 awk '
     /^source_url_allowed\(\) \{/ {inside=1}
     /^repo_add\(\) \{/ {inside=0}
@@ -69,10 +69,10 @@ grep -Fq 'UPSTREAM EXIT=00' /tmp/keenutils-nfqws-menu.log
 grep -Fq '  4. nfqws-menu' /tmp/keenutils-nfqws-menu.log
 grep -Fq '  8. TorrServer' /tmp/keenutils-nfqws-menu.log
 grep -Fq 'Выход.' /tmp/keenutils-nfqws-menu.log
-grep 'UPSTREAM UMASK=' /tmp/keenutils-nfqws-menu.log
-ls -l /opt/etc/keenutils-test-nfqws.list /opt/etc/keenutils-test-nfqws.bin
-[ "$(stat -c %a /opt/etc/keenutils-test-nfqws.list)" = 644 ]
-[ "$(stat -c %a /opt/etc/keenutils-test-nfqws.bin)" = 644 ]
+grep -Fq 'UPSTREAM UMASK=0022' /tmp/keenutils-nfqws-menu.log
+# /opt/etc can have a default ACL on CI hosts; check actual nobody access
+# rather than hard-coding the numeric mode (which ACL inheritance can alter).
+su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-test-nfqws.list && test -r /opt/etc/keenutils-test-nfqws.bin'
 # Enter in upstream menu also returns to KeenUtils (without exiting it).
 printf '4\n\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-menu-enter.log
@@ -99,6 +99,7 @@ case "$4" in
         cat >"$3" <<'FIRST_INSTALL_MENU'
 #!/bin/sh
 printf 'UPSTREAM FIRST INSTALL OK\n'
+printf 'FIRST INSTALL UMASK=%s\n' "$(umask)"
 printf 'example.org\n' >/opt/etc/keenutils-first-install.list
 FIRST_INSTALL_MENU
         ;;
@@ -110,8 +111,9 @@ printf '4\n\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-first-menu.log
 grep -q 'UPSTREAM FIRST INSTALL OK' /tmp/keenutils-first-menu.log
 grep -Fq 'Выход.' /tmp/keenutils-first-menu.log
+grep -Fq 'FIRST INSTALL UMASK=0022' /tmp/keenutils-first-menu.log
 [ -s /opt/nfqws-menu.sh ]
-[ "$(stat -c %a /opt/etc/keenutils-first-install.list)" = 644 ]
+su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-first-install.list'
 rm -f /opt/etc/keenutils-first-install.list
 sources_validate "$SOURCES_CACHE"
 echo 'Source catalog, nfqws-menu permissions and return-navigation tests passed.'
