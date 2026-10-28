@@ -36,14 +36,15 @@ printf '88\n1\n1\nn\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-cancel.log
 grep -Fq '88. Удаление программ' /tmp/u-cancel.log
 grep -Fq 'nfqws2 [Установлен]' /tmp/u-cancel.log
-grep -Fq 'Продолжить удаление nfqws2? [y/N]' /tmp/u-cancel.log
+grep -Fq 'Продолжить удаление nfqws2? [Y/n]' /tmp/u-cancel.log
 [ -s /opt/etc/nfqws2/nfqws2.conf ]
 [ -s /tmp/keenutils-uninstall-pkgs ]
 [ ! -s /tmp/keenutils-uninstall-log ]
 
 # Official package removal is selected explicitly. Its configuration remains
 # (the real package postrm asks whether to keep/remove it).
-printf '88\n1\n1\ny\n\n4\n\n0\n0\n00\n' |
+# Enter accepts the [Y/n] removal confirmation.
+printf '88\n1\n1\n\n\n4\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-nfqws2.log
 grep -Fq 'remove --autoremove nfqws2-keenetic' /tmp/keenutils-uninstall-log
 grep -Fq 'Программа удалена или установлена не через opkg' /tmp/u-nfqws2.log
@@ -54,7 +55,8 @@ grep -Fq 'Программа удалена или установлена не �
 printf '88\n1\n2\nn\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-keep-residue.log
 [ -s /opt/etc/nfqws2/nfqws2.conf ]
-printf '88\n1\n2\ny\n\n0\n0\n00\n' |
+# Enter accepts the [Y/n] irreversible cleanup confirmation.
+printf '88\n1\n2\n\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-clean-residue.log
 [ ! -e /opt/etc/nfqws2 ]
 [ ! -e /opt/etc/opkg/nfqws2-keenetic.conf ]
@@ -121,7 +123,8 @@ cmp /opt/etc/crontab /tmp/keenutils-cron-before
 [ -s /opt/bin/torr_watchdog.sh ]
 grep -Fxq torrserver /tmp/keenutils-uninstall-pkgs
 # Confirm watchdog disable and removal. Never touch unrelated cron or cache.
-printf '88\n1\n1\ny\ny\n\n0\n0\n00\n' |
+# Two Enter presses accept the watchdog-disable and remove confirmations.
+printf '88\n1\n1\n\n\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-torr-delete.log
 grep -Fq 'remove torrserver' /tmp/keenutils-uninstall-log
 grep -Fxq '1 2 * * * root echo keep' /opt/etc/crontab
@@ -202,7 +205,8 @@ grep -Fxq 'PRIVATE TEST KEY' /opt/etc/awg-manager/keys.conf
 printf '88\n1\n2\nn\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-awg-keep.log
 [ -s /opt/etc/awg-manager/keys.conf ]
-printf '88\n1\n2\ny\n\n0\n0\n00\n' |
+# Enter also confirms cleanup of the explicitly listed sensitive AWG remnants.
+printf '88\n1\n2\n\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-awg-clean.log
 [ ! -e /opt/etc/awg-manager ]
 grep -Fq 'VPN-ключи' /tmp/u-awg-clean.log
