@@ -2,7 +2,7 @@
 
 Интерактивный установщик программ для Keenetic с Entware.
 
-Запуск в shell Entware от root через SSH/Telnet:
+Установка в shell Entware от root через SSH/Telnet:
 ```sh
 opkg update && opkg install ca-certificates wget-ssl
 ```
