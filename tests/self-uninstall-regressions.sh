@@ -66,7 +66,8 @@ grep -Fxq 'FOREIGN BACKUP' /opt/bin/keenutils.backup
 
 # Exact and validated files are removed; unrelated programs remain.
 cp ./install /opt/bin/keenutils.backup
-printf '88\n%s\ny\n' "$self_index" |
+# Enter accepts default [Y/n] at the final self-uninstall prompt.
+printf '88\n%s\n\n' "$self_index" |
     script -q -c 'sh ./install' /dev/null \
     >/tmp/keenutils-self-confirm.log
 grep -Fq 'KeenUtils удалён.' /tmp/keenutils-self-confirm.log
@@ -87,7 +88,8 @@ cmp /opt/etc/crontab /tmp/keenutils-self-cron-original
 cp ./install /opt/bin/keenutils
 chmod 755 /opt/bin/keenutils
 printf 'FOREIGN SHORT COMMAND\n' >/opt/bin/utils
-printf '88\n%s\ny\n' "$self_index" |
+# Enter accepts default [Y/n] at the final self-uninstall prompt.
+printf '88\n%s\n\n' "$self_index" |
     script -q -c 'sh ./install' /dev/null \
     >/tmp/keenutils-self-foreign-utils.log
 grep -Fq 'KeenUtils удалён.' /tmp/keenutils-self-foreign-utils.log
