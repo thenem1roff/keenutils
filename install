@@ -843,6 +843,13 @@ u_torr_cache_path() {
     done
     [ -n "$U_CACHE" ]
 }
+# nfqws-menu creates this launcher when started. Only the exact symlink is
+# owned by nfqws-menu; a different link or a regular file is never ours.
+u_nfqws_menu_launcher() {
+    [ -L /opt/bin/menu ] || return 1
+    U_MENU_LINK=$(readlink /opt/bin/menu 2>/dev/null) || return 1
+    [ "$U_MENU_LINK" = /opt/nfqws-menu.sh ]
+}
 # Exact allowlist of application-owned residue paths. Never accept user input
 # as a deletion path, and do not remove shared Entware libraries.
 u_paths() {
@@ -854,7 +861,9 @@ u_paths() {
         nfqws-web)
             printf '%s\n' /opt/etc/nfqws_web.conf /opt/etc/opkg/nfqws-keenetic-web.conf ;;
         nfqws-menu)
-            printf '%s\n' /opt/etc/nfqws-menu /opt/etc/nfqws-menu.lang ;;
+            printf '%s\n' /opt/etc/nfqws-menu /opt/etc/nfqws-menu.lang
+            # Also detect a dangling launcher left by earlier KeenUtils versions.
+            if u_nfqws_menu_launcher; then printf '%s\n' /opt/bin/menu; fi ;;
         keenkit)
             # Only the script and its official launcher are managed here.
             printf '%s\n' /opt/keenkit.sh /opt/bin/keenkit ;;
@@ -946,8 +955,11 @@ u_remove_keenkit() {
     say 'KeenKit: файлы скрипта удалены, другие установленные им программы сохранены.'
 }
 u_remove_nfqws_menu() {
+    if u_nfqws_menu_launcher; then
+        rm -f /opt/bin/menu || return 1
+    fi
     rm -f /opt/nfqws-menu.sh || return 1
-    say 'Скрипт nfqws-menu удалён. Стратегии и установленные пакеты nfqws сохранены.'
+    say 'Скрипт и его штатная команда menu удалены. Стратегии и установленные пакеты nfqws сохранены.'
 }
 # Disable only the two exact watchdog cron entries. Other Cron jobs are
 # untouched. Unknown watchdog entries prevent unsafe partial removal.
@@ -1116,6 +1128,12 @@ u_cleanup() {
     fi
     ask_yes 'Безвозвратно удалить перечисленные остатки?' no || return 0
     for U_CP in $U_CLEAN_PATHS; do
+        # Revalidate the launcher after confirmation: never erase a foreign menu.
+        if [ "$U_CLEAN_ID" = nfqws-menu ] && [ "$U_CP" = /opt/bin/menu ] &&
+           ! u_nfqws_menu_launcher; then
+            say 'Чужая команда /opt/bin/menu сохранена.'
+            continue
+        fi
         rm -rf "$U_CP" || { err "Не удалось удалить $U_CP"; return 1; }
         say "Удалено: $U_CP"
     done
