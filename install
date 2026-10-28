@@ -1070,10 +1070,10 @@ u_remove() {
             if u_watchdog_present; then
                 say 'Для удаления TorrServer сначала необходимо отключить его watchdog.'
                 say 'Будут удалены только скрипт watchdog и две штатные строки Cron.'
-                ask_yes 'Отключить watchdog для удаления TorrServer?' no || return 0
+                ask_yes 'Отключить watchdog для удаления TorrServer?' yes || return 0
             fi ;;
     esac
-    ask_yes "Продолжить удаление $(u_label "$U_REMOVE_ID")?" no || return 0
+    ask_yes "Продолжить удаление $(u_label "$U_REMOVE_ID")?" yes || return 0
     case "$U_REMOVE_ID" in
         nfqws) opkg remove --autoremove nfqws-keenetic || return 1 ;;
         nfqws2) opkg remove --autoremove nfqws2-keenetic || return 1 ;;
@@ -1180,7 +1180,7 @@ u_cleanup() {
             return 1
         fi
     fi
-    ask_yes 'Безвозвратно удалить перечисленные остатки?' no || return 0
+    ask_yes 'Безвозвратно удалить перечисленные остатки?' yes || return 0
     for U_CP in $U_CLEAN_PATHS; do
         # Revalidate the launcher after confirmation: never erase a foreign menu.
         if [ "$U_CLEAN_ID" = nfqws-menu ] && [ "$U_CP" = /opt/bin/menu ] &&
@@ -1341,7 +1341,7 @@ uninstall_keenutils() {
     say 'История терминала, системные журналы, снимки диска и удалённые'
     say 'данные не затрагиваются. Отсутствие исторических следов не гарантируется.'
     say ''
-    ask_yes 'Удалить KeenUtils и закрыть меню?' no || {
+    ask_yes 'Удалить KeenUtils и закрыть меню?' yes || {
         say 'Удаление отменено.'
         return 0
     }
