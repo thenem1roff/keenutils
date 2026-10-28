@@ -1,6 +1,6 @@
 #!/bin/sh
 # Source allowlist, cached fallback and delegated upstream menu smoke tests.
-set -eu
+set -eux
 awk '
     /^source_url_allowed\(\) \{/ {inside=1}
     /^repo_add\(\) \{/ {inside=0}
