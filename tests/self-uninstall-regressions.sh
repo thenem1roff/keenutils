@@ -18,6 +18,8 @@ MOCK_OPKG
 chmod 755 /opt/bin/opkg
 cp ./install /opt/bin/keenutils
 chmod 755 /opt/bin/keenutils
+rm -f /opt/bin/utils
+ln -s /opt/bin/keenutils /opt/bin/utils
 cp ./install /opt/bin/keenutils.backup
 cp ./install /tmp/keenutils-install.sh
 cp ./sources.conf /opt/etc/keenutils/sources.conf
@@ -46,6 +48,8 @@ printf '88\n%s\nn\n\n\n' "$self_index" |
 grep -Fq 'Полное удаление KeenUtils' /tmp/keenutils-self-cancel.log
 grep -Fq 'Удаление отменено.' /tmp/keenutils-self-cancel.log
 [ -f /opt/bin/keenutils ]
+[ -L /opt/bin/utils ]
+[ "$(readlink /opt/bin/utils)" = /opt/bin/keenutils ]
 [ -f /opt/bin/keenutils.backup ]
 [ -f /opt/etc/keenutils/sources.conf ]
 [ -f /tmp/keenutils-install.sh ]
@@ -67,6 +71,8 @@ printf '88\n%s\ny\n' "$self_index" |
     >/tmp/keenutils-self-confirm.log
 grep -Fq 'KeenUtils удалён.' /tmp/keenutils-self-confirm.log
 [ ! -e /opt/bin/keenutils ]
+[ ! -e /opt/bin/utils ]
+[ ! -L /opt/bin/utils ]
 [ ! -e /opt/bin/keenutils.backup ]
 [ ! -e /opt/etc/keenutils/sources.conf ]
 [ ! -e /opt/etc/keenutils ]
@@ -77,4 +83,15 @@ grep -Fxq 'TORR BACKUP' /opt/var/backups/keenutils/torr-settings.test
 [ -x /opt/bin/torr_watchdog.sh ]
 cmp /opt/etc/crontab /tmp/keenutils-self-cron-original
 [ -x /opt/bin/opkg ]
-echo 'Self-uninstall: cancel, foreign-file guard and program data preservation OK.'
+# Unrelated file occupying the short name must not be removed.
+cp ./install /opt/bin/keenutils
+chmod 755 /opt/bin/keenutils
+printf 'FOREIGN SHORT COMMAND\n' >/opt/bin/utils
+printf '88\n%s\ny\n' "$self_index" |
+    script -q -c 'sh ./install' /dev/null \
+    >/tmp/keenutils-self-foreign-utils.log
+grep -Fq 'KeenUtils удалён.' /tmp/keenutils-self-foreign-utils.log
+[ ! -e /opt/bin/keenutils ]
+grep -Fxq 'FOREIGN SHORT COMMAND' /opt/bin/utils
+rm -f /opt/bin/utils
+echo 'Self-uninstall: safe utils alias removal, foreign-file guard and program data preservation OK.'

@@ -44,6 +44,12 @@ jobs:
           set -eu
           test -x /opt/bin/keenutils
           sh -n /opt/bin/keenutils
+          test -L /opt/bin/utils
+          test "$(readlink /opt/bin/utils)" = /opt/bin/keenutils
+          # Both the short command and the legacy one open the same menu.
+          printf '00\n' |
+            script -q -c 'sudo /opt/bin/utils' /dev/null > /tmp/utils-command.log
+          grep -q 'Выход.' /tmp/utils-command.log
           printf '00\n' |
             script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-command.log
           grep -q 'Выход.' /tmp/keenutils-command.log
@@ -65,6 +71,8 @@ jobs:
           grep -q 'KeenUtils успешно обновлён' /tmp/keenutils-updated.log
           grep -q 'Выход.' /tmp/keenutils-updated.log
           cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
+          test -L /opt/bin/utils
+          test "$(readlink /opt/bin/utils)" = /opt/bin/keenutils
           grep -q 'old-version-for-test' /opt/bin/keenutils.backup
           # Running the same update again must not rewrite the installation.
           printf '99\n\n\n00\n' |
