@@ -461,12 +461,26 @@ launch_nfqws_menu() {
 }
 
 install_keenkit() {
-    if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
-        say 'KeenKit уже установлен.'
-        return 0
+    kk_target=/opt/keenkit.sh
+    if [ -f "$kk_target" ] && [ -e /opt/bin/keenkit ]; then
+        [ -s "$kk_target" ] && sh -n "$kk_target" ||
+            { err 'Установленный KeenKit повреждён. Не запускаю и не перезаписываю.'; return 1; }
+        say 'Запуск уже установленного KeenKit.'
+        # Run as a child: KeenKit's exit/exec stays within that child, so
+        # choosing 00 returns to the KeenUtils main menu.
+        (
+            umask 022
+            sh "$kk_target"
+        )
+        return $?
     fi
-    fetch_and_run keenkit KeenKit || return 1
-    if [ -f /opt/keenkit.sh ] && [ -e /opt/bin/keenkit ]; then
+    # Upstream install.sh already execs keenkit.sh after installation.
+    # Delegate in a child so 00 returns here, without launching twice.
+    (
+        umask 022
+        fetch_and_run keenkit KeenKit
+    ) || return 1
+    if [ -f "$kk_target" ] && [ -e /opt/bin/keenkit ]; then
         say 'KeenKit установлен в /opt/keenkit.sh и /opt/bin/keenkit.'
     else
         err 'KeenKit не найден в ожидаемых каталогах (или установка отменена).'
