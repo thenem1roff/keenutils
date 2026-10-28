@@ -144,15 +144,39 @@ cmp /opt/etc/crontab /tmp/keenutils-custom-cron
 grep -Fq 'нестандартные задания watchdog' /tmp/u-unknown-watchdog.log
 
 # HydraRoute: standard opkg packages only, NO full upstream cleanup script.
+# Upstream postinst creates /opt/bin/neo -> /opt/etc/init.d/S99hrneo,
+# but the symlink is not part of the opkg package file manifest.
 printf 'hrneo\nhrweb\n' >/tmp/keenutils-uninstall-pkgs
 : >/tmp/keenutils-uninstall-log
 rm -f /opt/bin/torr_watchdog.sh
 printf '%s\n' 'ROUTE CONFIG' > /opt/etc/HydraRoute-test-placeholder
+printf 'keep\n' > /opt/bin/keenutils-neighbor-test
+rm -f /opt/bin/neo
+ln -s /opt/etc/init.d/S99hrneo /opt/bin/neo
 printf '88\n1\n1\ny\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-hydra.log
 grep -Fxq 'remove hrweb' /tmp/keenutils-uninstall-log
 grep -Fxq 'remove hrneo' /tmp/keenutils-uninstall-log
 ! grep -q 'hr-uninstall.sh' /tmp/keenutils-uninstall-log
+[ ! -L /opt/bin/neo ]
+grep -Fxq keep /opt/bin/keenutils-neighbor-test
+
+# A leftover launcher from an older version must be found as residue.
+ln -s /opt/etc/init.d/S99hrneo /opt/bin/neo
+printf '88\n1\n2\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-hydra-residue.log
+grep -Fq 'Удалено: /opt/bin/neo' /tmp/u-hydra-residue.log
+[ ! -L /opt/bin/neo ]
+
+# A foreign /opt/bin/neo launcher must not be removed.
+printf 'hrneo\nhrweb\n' >/tmp/keenutils-uninstall-pkgs
+ln -s /opt/unrelated-neo.sh /opt/bin/neo
+printf '88\n1\n1\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-hydra-foreign.log
+[ -L /opt/bin/neo ]
+[ "$(readlink /opt/bin/neo)" = /opt/unrelated-neo.sh ]
+grep -Fxq keep /opt/bin/keenutils-neighbor-test
+rm -f /opt/bin/neo /opt/bin/keenutils-neighbor-test
 # A service script still present means we must not erase active NFQWS files
 # even if opkg metadata is corrupted.
 : >/tmp/keenutils-uninstall-pkgs

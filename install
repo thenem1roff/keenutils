@@ -850,6 +850,13 @@ u_nfqws_menu_launcher() {
     U_MENU_LINK=$(readlink /opt/bin/menu 2>/dev/null) || return 1
     [ "$U_MENU_LINK" = /opt/nfqws-menu.sh ]
 }
+# HydraRoute Neo's postinst creates /opt/bin/neo outside of opkg's file list.
+# Never remove a different link or regular file with the same name.
+u_hydra_launcher() {
+    [ -L /opt/bin/neo ] || return 1
+    U_HYDRA_LINK=$(readlink /opt/bin/neo 2>/dev/null) || return 1
+    [ "$U_HYDRA_LINK" = /opt/etc/init.d/S99hrneo ]
+}
 # Exact allowlist of application-owned residue paths. Never accept user input
 # as a deletion path, and do not remove shared Entware libraries.
 u_paths() {
@@ -868,7 +875,9 @@ u_paths() {
             # Only the script and its official launcher are managed here.
             printf '%s\n' /opt/keenkit.sh /opt/bin/keenkit ;;
         hydra)
-            printf '%s\n' /opt/etc/HydraRoute ;;
+            printf '%s\n' /opt/etc/HydraRoute
+            # Match even a broken /opt/bin/neo left by package postinst.
+            if u_hydra_launcher; then printf '%s\n' /opt/bin/neo; fi ;;
         awg)
             printf '%s\n' /opt/etc/awg-manager ;;
         torrserver)
@@ -1036,6 +1045,11 @@ u_remove() {
             # invoke the upstream full cleanup that removes unrelated packages.
             if pkg_installed hrweb; then opkg remove hrweb || return 1; fi
             if pkg_installed hrneo; then opkg remove hrneo || return 1; fi
+            # The upstream postinst creates an untracked /opt/bin/neo link.
+            # Clean it only after hrneo is confirmed removed.
+            if ! pkg_installed hrneo && u_hydra_launcher; then
+                rm -f /opt/bin/neo || return 1
+            fi
             ;;
         awg) opkg remove awg-manager || return 1 ;;
         torr-watchdog) u_disable_watchdog || return 1 ;;
@@ -1132,6 +1146,11 @@ u_cleanup() {
         if [ "$U_CLEAN_ID" = nfqws-menu ] && [ "$U_CP" = /opt/bin/menu ] &&
            ! u_nfqws_menu_launcher; then
             say 'Чужая команда /opt/bin/menu сохранена.'
+            continue
+        fi
+        if [ "$U_CLEAN_ID" = hydra ] && [ "$U_CP" = /opt/bin/neo ] &&
+           ! u_hydra_launcher; then
+            say 'Чужая команда /opt/bin/neo сохранена.'
             continue
         fi
         rm -rf "$U_CP" || { err "Не удалось удалить $U_CP"; return 1; }
