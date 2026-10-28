@@ -3,15 +3,11 @@
 Интерактивный установщик программ для Keenetic с Entware.
 
 Запуск в shell Entware от root через SSH/Telnet:
-
-```sh
-wget -O /tmp/keenutils-install.sh https://raw.githubusercontent.com/thenem1roff/keenutils/main/install && sh /tmp/keenutils-install.sh
-```
-
-Если установленный `wget` не поддерживает HTTPS, сначала установите его SSL-версию:
-
 ```sh
 opkg update && opkg install ca-certificates wget-ssl
+```
+```sh
+wget -O /tmp/keenutils-install.sh https://raw.githubusercontent.com/thenem1roff/keenutils/main/install && sh /tmp/keenutils-install.sh
 ```
 
 **Повторный запуск:** просто введите `keenutils` в терминале. Скачивать установщик заново не нужно.
