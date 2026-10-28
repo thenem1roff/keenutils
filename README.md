@@ -10,7 +10,7 @@ opkg update && opkg install ca-certificates wget-ssl
 wget -O /tmp/keenutils-install.sh https://raw.githubusercontent.com/thenem1roff/keenutils/main/install && sh /tmp/keenutils-install.sh
 ```
 
-**Повторный запуск:** введите `utils` в терминале. Старая команда `keenutils` тоже работает. `utils` — ссылка на тот же установленный скрипт, а не отдельная копия. После обновления через пункт **99** короткая команда добавится автоматически, если `/opt/bin/utils` не занят другим файлом.
+**Повторный запуск:** введите `utils` или `keenutils` в терминале.
 
 Во всех меню **Enter без цифр** выполняет действие пункта `0`: возврат назад, а в главном меню — выход.
 
