@@ -46,15 +46,47 @@ if sources_refresh; then
     echo 'accepted invalid offline sources' >&2
     exit 1
 fi
-# Entrypoint 4 runs an installed original upstream menu, without downloading it.
-printf '#!/bin/sh\nprintf "UPSTREAM NFQWS MENU OPENED\n"\n' |
-    tee /opt/nfqws-menu.sh >/dev/null
+# Entrypoint 4 runs the installed upstream menu without downloading it.
+# The delegated process must create hostlists/blobs readable by nfqws
+# (runs as nobody), even though KeenUtils itself uses umask 077.
+cat >/opt/nfqws-menu.sh <<'MOCK_MENU'
+#!/bin/sh
+printf 'UPSTREAM NFQWS MENU OPENED\n'
+printf 'UPSTREAM UMASK=%s\n' "$(umask)"
+printf 'example.org\n' >/opt/etc/keenutils-test-nfqws.list
+printf 'fake blob\n' >/opt/etc/keenutils-test-nfqws.bin
+selection=''
+IFS= read -r selection || :
+printf 'UPSTREAM EXIT=%s\n' "$selection"
+exit 0
+MOCK_MENU
 chmod 755 /opt/nfqws-menu.sh
-printf '4\n\n00\n' |
+# 00 in nfqws-menu, Enter at KeenUtils pause, then 00 exits KeenUtils.
+printf '4\n00\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-menu.log
-grep -q 'UPSTREAM NFQWS MENU OPENED' /tmp/keenutils-nfqws-menu.log
-grep -q '  4. nfqws-menu' /tmp/keenutils-nfqws-menu.log
-grep -q '  8. TorrServer' /tmp/keenutils-nfqws-menu.log
+grep -Fq 'UPSTREAM NFQWS MENU OPENED' /tmp/keenutils-nfqws-menu.log
+grep -Fq 'UPSTREAM EXIT=00' /tmp/keenutils-nfqws-menu.log
+grep -Fq '  4. nfqws-menu' /tmp/keenutils-nfqws-menu.log
+grep -Fq '  8. TorrServer' /tmp/keenutils-nfqws-menu.log
+grep -Fq 'Выход.' /tmp/keenutils-nfqws-menu.log
+grep -Fq 'UPSTREAM UMASK=0022' /tmp/keenutils-nfqws-menu.log
+# /opt/etc can have a default ACL on CI hosts; check actual nobody access
+# rather than hard-coding the numeric mode (which ACL inheritance can alter).
+su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-test-nfqws.list && test -r /opt/etc/keenutils-test-nfqws.bin'
+# Enter in upstream menu also returns to KeenUtils (without exiting it).
+printf '4\n\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-menu-enter.log
+grep -Fq 'UPSTREAM EXIT=' /tmp/keenutils-nfqws-menu-enter.log
+grep -Fq 'Выход.' /tmp/keenutils-nfqws-menu-enter.log
+# The parent's mask remains strict after the delegated call finishes.
+awk '/^launch_nfqws_menu\(\) \{/ {copy=1}
+     /^install_keenkit\(\) \{/ {copy=0}
+     copy {print}' install >/tmp/keenutils-launch-nfqws-test.sh
+. /tmp/keenutils-launch-nfqws-test.sh
+umask 077
+launch_nfqws_menu </dev/null >/tmp/keenutils-nfqws-direct.log
+[ "$(umask)" = 0077 ]
+rm -f /opt/etc/keenutils-test-nfqws.list /opt/etc/keenutils-test-nfqws.bin
 # First run: fetch catalog + install only the original menu from its repository.
 rm -f /opt/nfqws-menu.sh "$SOURCES_CACHE"
 cp ./sources.conf /tmp/keenutils-ci-sources
@@ -64,7 +96,13 @@ cat >/opt/bin/wget <<'MOCK_DOWNLOAD'
 case "$4" in
     */sources.conf) cp /tmp/keenutils-ci-sources "$3" ;;
     */nfqws-menu.sh)
-        printf '#!/bin/sh\nprintf "UPSTREAM FIRST INSTALL OK\n"\n' > "$3" ;;
+        cat >"$3" <<'FIRST_INSTALL_MENU'
+#!/bin/sh
+printf 'UPSTREAM FIRST INSTALL OK\n'
+printf 'FIRST INSTALL UMASK=%s\n' "$(umask)"
+printf 'example.org\n' >/opt/etc/keenutils-first-install.list
+FIRST_INSTALL_MENU
+        ;;
     *) exit 1 ;;
 esac
 MOCK_DOWNLOAD
@@ -72,6 +110,10 @@ chmod 755 /opt/bin/wget
 printf '4\n\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-first-menu.log
 grep -q 'UPSTREAM FIRST INSTALL OK' /tmp/keenutils-first-menu.log
+grep -Fq 'Выход.' /tmp/keenutils-first-menu.log
+grep -Fq 'FIRST INSTALL UMASK=0022' /tmp/keenutils-first-menu.log
 [ -s /opt/nfqws-menu.sh ]
+su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-first-install.list'
+rm -f /opt/etc/keenutils-first-install.list
 sources_validate "$SOURCES_CACHE"
-echo 'Source catalog and delegated nfqws-menu tests passed.'
+echo 'Source catalog, nfqws-menu permissions and return-navigation tests passed.'

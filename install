@@ -430,8 +430,13 @@ launch_nfqws_menu() {
             return 1
         fi
     fi
-    # The upstream menu handles its own updates, strategies and backups.
-    sh "$nm_target"
+    # The upstream menu replaces nfqws hostlists and blobs. These must be
+    # readable by the nfqws daemon (which drops privileges to nobody).
+    # Keep KeenUtils' restrictive umask 077 outside this subprocess.
+    (
+        umask 022
+        sh "$nm_target"
+    )
 }
 
 install_keenkit() {
