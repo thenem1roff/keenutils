@@ -52,6 +52,7 @@ fi
 cat >/opt/nfqws-menu.sh <<'MOCK_MENU'
 #!/bin/sh
 printf 'UPSTREAM NFQWS MENU OPENED\n'
+printf 'UPSTREAM UMASK=%s\n' "$(umask)"
 printf 'example.org\n' >/opt/etc/keenutils-test-nfqws.list
 printf 'fake blob\n' >/opt/etc/keenutils-test-nfqws.bin
 selection=''
@@ -68,6 +69,8 @@ grep -Fq 'UPSTREAM EXIT=00' /tmp/keenutils-nfqws-menu.log
 grep -Fq '  4. nfqws-menu' /tmp/keenutils-nfqws-menu.log
 grep -Fq '  8. TorrServer' /tmp/keenutils-nfqws-menu.log
 grep -Fq 'Выход.' /tmp/keenutils-nfqws-menu.log
+grep 'UPSTREAM UMASK=' /tmp/keenutils-nfqws-menu.log
+ls -l /opt/etc/keenutils-test-nfqws.list /opt/etc/keenutils-test-nfqws.bin
 [ "$(stat -c %a /opt/etc/keenutils-test-nfqws.list)" = 644 ]
 [ "$(stat -c %a /opt/etc/keenutils-test-nfqws.bin)" = 644 ]
 # Enter in upstream menu also returns to KeenUtils (without exiting it).
