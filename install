@@ -110,9 +110,27 @@ ensure_ssl_wget() {
     fi
     install_pkg wget-ssl
 }
-# Install the downloaded installer once so it can be launched as "keenutils".
+# Keep the existing installation path for updates and backward compatibility.
+# /opt/bin/utils is a short alias, not a second copy of the script.
 # Do not silently replace an existing installation; menu item 99 does updates.
 KEENUTILS_BIN=/opt/bin/keenutils
+UTILS_ALIAS=/opt/bin/utils
+utils_alias_is_ours() {
+    [ -L "$UTILS_ALIAS" ] &&
+        [ "$(readlink "$UTILS_ALIAS" 2>/dev/null)" = "$KEENUTILS_BIN" ]
+}
+ensure_utils_alias() {
+    utils_alias_is_ours && return 0
+    if [ -e "$UTILS_ALIAS" ] || [ -L "$UTILS_ALIAS" ]; then
+        err "Команда utils уже занята другим файлом: $UTILS_ALIAS. Не перезаписываю."
+        return 1
+    fi
+    if ! ln -s "$KEENUTILS_BIN" "$UTILS_ALIAS"; then
+        err "Не удалось создать короткую команду $UTILS_ALIAS."
+        return 1
+    fi
+    say 'Для запуска KeenUtils используйте: utils'
+}
 valid_keenutils() {
     [ -s "$1" ] && sh -n "$1" >/dev/null 2>&1 &&
         grep -Fq '# KeenUtils Installer:' "$1" &&
@@ -126,7 +144,7 @@ ensure_mktemp() {
 }
 bootstrap_keenutils() {
     case "$0" in
-        /opt/bin/keenutils|keenutils) return 0 ;;
+        /opt/bin/keenutils|keenutils|/opt/bin/utils|utils) return 0 ;;
     esac
     if [ -e "$KEENUTILS_BIN" ] || [ -L "$KEENUTILS_BIN" ]; then
         valid_keenutils "$KEENUTILS_BIN" ||
@@ -159,10 +177,13 @@ bootstrap_keenutils() {
     [ -x "$KEENUTILS_BIN" ] && valid_keenutils "$KEENUTILS_BIN" ||
         { err 'После установки /opt/bin/keenutils не прошёл проверку.'; return 1; }
     say 'KeenUtils установлен: /opt/bin/keenutils'
-    say 'В дальнейшем запускайте меню командой: keenutils'
+    say 'В дальнейшем запускайте меню командой: utils (или keenutils)'
     exec "$KEENUTILS_BIN"
 }
 bootstrap_keenutils || exit 1
+# Also repair the short launcher on startup after older installs are updated.
+# An unrelated /opt/bin/utils is never overwritten.
+ensure_utils_alias || :
 
 # Menu item 99: download, validate and atomically replace the installed script.
 # Never update packages or the other utilities as a side effect.
@@ -1285,6 +1306,9 @@ uninstall_keenutils() {
     say '============================================='
     say 'Будут удалены только собственные файлы KeenUtils:'
     say "  $KEENUTILS_BIN"
+    if utils_alias_is_ours; then
+        say "  $UTILS_ALIAS (ссылка на KeenUtils)"
+    fi
     if [ -f /opt/bin/keenutils.backup ]; then
         say '  /opt/bin/keenutils.backup'
     fi
@@ -1331,6 +1355,12 @@ uninstall_keenutils() {
     if [ -n "$KU_TEMP_INSTALL" ]; then
         rm -f "$KU_TEMP_INSTALL" ||
             { err 'Не удалось удалить временный установщик.'; return 1; }
+    fi
+    # Remove only our exact short-command symlink; foreign /opt/bin/utils
+    # files and links are never touched.
+    if utils_alias_is_ours; then
+        rm -f "$UTILS_ALIAS" ||
+            { err 'Не удалось удалить короткую команду utils.'; return 1; }
     fi
     rm -f "$KEENUTILS_BIN" || {
         err 'Не удалось удалить /opt/bin/keenutils. Удаление неполное.'
