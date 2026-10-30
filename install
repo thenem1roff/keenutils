@@ -645,12 +645,18 @@ torr_api_call() {
 get_torr_settings() {
     torr_api_call '{"action":"get"}' || return 1
     TORR_CURRENT_SETTINGS=$(cat "$TORR_RESPONSE_FILE") || return 1
+    # /settings "set" replaces the complete BTSets object. Require the
+    # numeric fields before merging the preset to avoid resetting unknown
+    # or incompatible server versions.
     printf '%s' "$TORR_CURRENT_SETTINGS" |
-        jq -e 'type=="object" and has("UseDisk") and
-               has("TorrentsSavePath") and
+        jq -e 'type=="object" and
                (.UseDisk|type=="boolean") and
-               (.TorrentsSavePath|type=="string")' >/dev/null ||
-        { err 'API не вернул поля UseDisk/TorrentsSavePath.'; return 1; }
+               (.TorrentsSavePath|type=="string") and
+               (.CacheSize|type=="number") and
+               (.ReaderReadAHead|type=="number") and
+               (.PreloadCache|type=="number") and
+               (.DownloadRateLimit|type=="number")' >/dev/null ||
+        { err 'API не вернул ожидаемые поля настроек кеша и скорости.'; return 1; }
 }
 set_torr_settings() {
     req=$(printf '%s' "$1" | jq -c '{action:"set",sets:.}') || return 1
@@ -690,16 +696,30 @@ configure_torr_cache_inner() {
     existing=$TORR_CURRENT_SETTINGS
     old_path=$(printf '%s' "$existing" | jq -r '.TorrentsSavePath') || return 1
     old_disk=$(printf '%s' "$existing" | jq -r '.UseDisk') || return 1
+    old_size=$(printf '%s' "$existing" | jq -r '.CacheSize') || return 1
+    old_ahead=$(printf '%s' "$existing" | jq -r '.ReaderReadAHead') || return 1
+    old_preload=$(printf '%s' "$existing" | jq -r '.PreloadCache') || return 1
+    old_rate=$(printf '%s' "$existing" | jq -r '.DownloadRateLimit') || return 1
     say "Сейчас: $old_path (UseDisk=$old_disk)"
+    say "Кеш: $old_size байт; впереди: $old_ahead%; предзагрузка: $old_preload%; загрузка: $old_rate КБ/с"
     find_entware_disk || return 1
     CACHE_DIR="$DISK_ROOT/tscashe"
     say "Предлагается: $CACHE_DIR"
-    if [ "$old_path" = "$CACHE_DIR" ] && [ "$old_disk" = true ]; then
-        say 'Кеш уже настроен по этому пути. Изменений не требуется.'
+    say 'Кеш: 1024 МиБ (1073741824 байт); впереди: 95%; предзагрузка: 5% (51 МиБ)'
+    say 'Ограничение скорости загрузки: 6250 КБ/с (6400000 байт/с)'
+    # Check all requested values, not just the cache path. An already
+    # configured disk cache can still need the size/speed preset.
+    if printf '%s' "$existing" |
+        jq -e --arg p "$CACHE_DIR" '
+          .TorrentsSavePath == $p and .UseDisk == true and
+          .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
+          .PreloadCache == 5 and .DownloadRateLimit == 6250
+        ' >/dev/null; then
+        say 'Настройки кеша и ограничения скорости уже совпадают. Изменений не требуется.'
         return 0
     fi
     say 'При сохранении TorrServer переподключает торрент-сессии.'
-    ask_yes 'Изменить настройки дискового кеша?' yes || return 0
+    ask_yes 'Применить настройки кеша и ограничения скорости?' yes || return 0
     mkdir -p "$CACHE_DIR" || return 1
     probe="$CACHE_DIR/.keenutils-check.$$"
     if ! ( : > "$probe" ); then
@@ -713,9 +733,15 @@ configure_torr_cache_inner() {
     chmod 600 "$backup" || return 1
     printf '%s\n' "$existing" > "$backup" || return 1
     say "Резервная копия настроек: $backup"
+    # API CacheSize is in bytes; DownloadRateLimit is in KiB/s and TorrServer
+    # itself multiplies this field by 1024 in server/torr/btserver.go.
+    # Preserve all unrelated fields of the original settings object.
     updated=$(printf '%s' "$existing" |
-        jq -c --arg p "$CACHE_DIR" '.TorrentsSavePath=$p | .UseDisk=true') ||
-        return 1
+        jq -c --arg p "$CACHE_DIR" '
+          .TorrentsSavePath=$p | .UseDisk=true |
+          .CacheSize=1073741824 | .ReaderReadAHead=95 |
+          .PreloadCache=5 | .DownloadRateLimit=6250
+        ') || return 1
     if ! set_torr_settings "$updated"; then
         err "Сохранение не подтверждено API. Копия: $backup"
         return 1
@@ -723,21 +749,23 @@ configure_torr_cache_inner() {
     attempts=0
     while [ "$attempts" -lt 3 ]; do
         if get_torr_settings; then
-            new_path=$(printf '%s' "$TORR_CURRENT_SETTINGS" |
-                jq -r '.TorrentsSavePath') || return 1
-            new_disk=$(printf '%s' "$TORR_CURRENT_SETTINGS" |
-                jq -r '.UseDisk') || return 1
-            if [ "$new_path" = "$CACHE_DIR" ] && [ "$new_disk" = true ]; then
-                say "УСПЕХ: UseDisk=true, путь кеша: $new_path"
-                say 'Настройка подтверждена повторным чтением из TorrServer.'
+            if printf '%s' "$TORR_CURRENT_SETTINGS" |
+                jq -e --arg p "$CACHE_DIR" '
+                  .TorrentsSavePath == $p and .UseDisk == true and
+                  .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
+                  .PreloadCache == 5 and .DownloadRateLimit == 6250
+                ' >/dev/null; then
+                say "УСПЕХ: UseDisk=true, путь кеша: $CACHE_DIR"
+                say 'Кеш: 1024 МиБ; впереди: 95%; предзагрузка: 5%; скорость загрузки: 6250 КБ/с.'
+                say 'Все изменения подтверждены повторным чтением из TorrServer.'
                 return 0
             fi
         fi
         attempts=$((attempts + 1))
         sleep 2
     done
-    err 'TorrServer не подтвердил новую настройку (возможен режим read-only).'
-    err "Прежний путь: $old_path; требуемый: $CACHE_DIR"
+    err 'TorrServer не подтвердил новые параметры (возможен режим read-only).'
+    err "Требуемые: путь $CACHE_DIR, кеш 1024 МиБ, впереди 95%, предзагрузка 5%, скорость 6250 КБ/с."
     err "Резервная копия: $backup"
     return 1
 }
