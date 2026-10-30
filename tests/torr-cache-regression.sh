@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 HTTPServer(("127.0.0.1", 18090), Handler).serve_forever()
 PY
-printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"FriendlyName":"test"}\n' > /tmp/keenutils-cache-state.json
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":90,"PreloadCache":50,"DownloadRateLimit":0,"UploadRateLimit":200,"FriendlyName":"test"}\n' > /tmp/keenutils-cache-state.json
 python3 /tmp/keenutils-cache-api.py >/tmp/keenutils-cache-api.log 2>&1 &
 api_pid=$!
 trap 'kill "$api_pid" 2>/dev/null || :; torr_api_cleanup; rm -rf "$MOCK_DISK"' EXIT
@@ -86,14 +86,34 @@ chmod 600 "$TORR_AUTHFILE"
 get_torr_settings
 [ "$(printf '%s' "$TORR_CURRENT_SETTINGS" | jq -r .UseDisk)" = false ]
 configure_torr_cache_inner
-jq -e '.UseDisk == true and .TorrentsSavePath == "/tmp/mnt/keenutils-cache-test/tscashe" and .FriendlyName == "test"' /tmp/keenutils-cache-state.json >/dev/null
+jq -e '
+  .UseDisk == true and
+  .TorrentsSavePath == "/tmp/mnt/keenutils-cache-test/tscashe" and
+  .CacheSize == 1073741824 and
+  .ReaderReadAHead == 95 and
+  .PreloadCache == 5 and
+  .DownloadRateLimit == 6250 and
+  .UploadRateLimit == 200 and .FriendlyName == "test"
+' /tmp/keenutils-cache-state.json >/dev/null
 test -d "$MOCK_DISK/tscashe"
-# Repeated execution doesn't modify settings again.
+# A repeated run is a no-op when path, size, ratios and limit match.
 cp /tmp/keenutils-cache-state.json /tmp/keenutils-cache-before.json
-configure_torr_cache_inner
+configure_torr_cache_inner >/tmp/keenutils-cache-noop.log
+grep -Fq 'уже совпадают' /tmp/keenutils-cache-noop.log
 cmp -s /tmp/keenutils-cache-before.json /tmp/keenutils-cache-state.json
+# Path already correct but the speed limit has been changed separately:
+# reapplying the preset must not short-circuit on path equality alone.
+jq '.DownloadRateLimit=0' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-rate-mismatch.json
+mv /tmp/keenutils-cache-rate-mismatch.json /tmp/keenutils-cache-state.json
+configure_torr_cache_inner
+jq -e '.DownloadRateLimit==6250 and .CacheSize==1073741824 and .PreloadCache==5' /tmp/keenutils-cache-state.json >/dev/null
+# Similarly, an existing disk cache with smaller size must be updated.
+jq '.CacheSize=67108864' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-size-mismatch.json
+mv /tmp/keenutils-cache-size-mismatch.json /tmp/keenutils-cache-state.json
+configure_torr_cache_inner
+jq -e '.CacheSize==1073741824 and .ReaderReadAHead==95' /tmp/keenutils-cache-state.json >/dev/null
 # HTTP 200 is NOT sufficient: read-only API must be detected as a failure.
-printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864}\n' > /tmp/keenutils-cache-state.json
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":95,"PreloadCache":50,"DownloadRateLimit":0}\n' > /tmp/keenutils-cache-state.json
 touch /tmp/keenutils-cache-readonly
 if configure_torr_cache_inner; then
     echo 'Read-only TorrServer incorrectly reported cache configuration success' >&2
@@ -101,4 +121,11 @@ if configure_torr_cache_inner; then
 fi
 jq -e '.UseDisk == false and .TorrentsSavePath == ""' /tmp/keenutils-cache-state.json >/dev/null
 rm -f /tmp/keenutils-cache-readonly
-echo 'TorrServer API authentication, cache persistence, and disk checks passed.'
+# Do not modify incompatible or truncated settings payloads.
+printf '{"UseDisk":false,"TorrentsSavePath":""}\n' > /tmp/keenutils-cache-state.json
+if configure_torr_cache_inner; then
+    echo 'Malformed settings payload was modified' >&2
+    exit 1
+fi
+jq -e 'has("CacheSize") | not' /tmp/keenutils-cache-state.json >/dev/null
+echo 'TorrServer API: authentication, 1024 MiB/95%/5%/6250 KiB/s, preservation, no-op, read-only and validation passed.'
