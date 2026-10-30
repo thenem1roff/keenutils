@@ -11,10 +11,14 @@ API_URL="http://127.0.0.1:8090/echo"
 export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 TMP=""
-STOPPED=0
+BACKUP_TMP=""
+RESTORE_TMP=""
+WAS_RUNNING=0
 
 cleanup() {
     [ -z "$TMP" ] || rm -f "$TMP"
+    [ -z "$BACKUP_TMP" ] || rm -f "$BACKUP_TMP"
+    [ -z "$RESTORE_TMP" ] || rm -f "$RESTORE_TMP"
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -162,19 +166,67 @@ DOWNLOADED=$(version "$TMP")
 
 echo "Бинарник проверен: $DOWNLOADED"
 
-# Резервная копия
+# Keep a complete backup on the same filesystem. Never truncate a previous
+# valid backup if copying the installed binary fails.
 echo "Создание резервной копии..."
-cp -p "$BIN" "$BACKUP" ||
-    fail "Не удалось создать резервную копию"
+BACKUP_TMP=$(mktemp /opt/sbin/.torrserver.backup.XXXXXX) ||
+    fail "Не удалось подготовить резервную копию"
+cp -p "$BIN" "$BACKUP_TMP" ||
+    fail "Не удалось скопировать установленный бинарник"
+[ "$(version "$BACKUP_TMP")" = "$CURRENT" ] ||
+    fail "Резервная копия не прошла проверку версии"
+mv -f "$BACKUP_TMP" "$BACKUP" ||
+    fail "Не удалось сохранить резервную копию"
+BACKUP_TMP=""
+
+service_running() {
+    pgrep -x torrserver >/dev/null 2>&1
+}
+
+# Entware rc.func can return nonzero and print "Checking torrserver... dead"
+# when the daemon was already stopped. Verify the real process state rather
+# than interpreting the exit status of "stop" as proof of failure.
+stop_and_verify() {
+    if ! service_running; then
+        echo 'TorrServer уже остановлен — останавливать нечего.'
+        return 0
+    fi
+    "$SERVICE" stop ||
+        echo 'Init-скрипт вернул ошибку остановки; проверяю процесс...'
+    tries=0
+    while service_running && [ "$tries" -lt 10 ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    if service_running; then
+        return 1
+    fi
+    return 0
+}
 
 rollback() {
     echo "Восстановление предыдущей версии..."
-    "$SERVICE" stop >/dev/null 2>&1
-    cp -p "$BACKUP" "$BIN" ||
-        fail "Не удалось восстановить бинарник!"
-    "$SERVICE" start
+    stop_and_verify ||
+        fail "Не удалось безопасно остановить новую версию для отката! Копия: $BACKUP"
+    RESTORE_TMP=$(mktemp /opt/sbin/.torrserver.restore.XXXXXX) ||
+        fail "Не удалось создать временный файл отката! Копия: $BACKUP"
+    cp -p "$BACKUP" "$RESTORE_TMP" ||
+        fail "Не удалось скопировать резервную версию! Копия: $BACKUP"
+    [ "$(version "$RESTORE_TMP")" = "$CURRENT" ] ||
+        fail "Проверка резервной версии не пройдена! Копия: $BACKUP"
+    mv -f "$RESTORE_TMP" "$BIN" ||
+        fail "Не удалось восстановить бинарник! Копия: $BACKUP"
+    RESTORE_TMP=""
+    if [ "$WAS_RUNNING" -eq 1 ]; then
+        "$SERVICE" start ||
+            echo 'Init-скрипт вернул ошибку при восстановлении службы.'
+        sleep 2
+        service_running ||
+            fail "Предыдущая версия восстановлена, но сервис не запущен!"
+    else
+        echo 'Предыдущая версия восстановлена; исходно сервис был остановлен.'
+    fi
 }
-
 
 echo "Ожидание безопасного момента..."
 
@@ -187,10 +239,15 @@ while :; do
 done
 
 echo "Остановка TorrServer..."
-"$SERVICE" stop ||
-    fail "Не удалось остановить службу"
+if service_running; then
+    WAS_RUNNING=1
+fi
+stop_and_verify ||
+    fail "Сервис продолжает работать после остановки. Бинарник НЕ заменён, резервная копия: $BACKUP"
 
-STOPPED=1
+# Last safety check immediately before replacing the executable.
+service_running &&
+    fail "TorrServer запущен повторно перед заменой (возможен watchdog). Бинарник не изменён."
 
 echo "Замена бинарника..."
 if ! mv -f "$TMP" "$BIN"; then
@@ -200,7 +257,8 @@ fi
 TMP=""
 
 echo "Запуск TorrServer..."
-"$SERVICE" start
+"$SERVICE" start ||
+    echo 'Init-скрипт вернул ошибку запуска; проверяю фактическое состояние.'
 
 echo "Проверка работоспособности..."
 
@@ -216,9 +274,11 @@ while [ "$i" -lt 10 ]; do
         --connect-timeout 2 --max-time 3 \
         "$API_URL")
 
+    # HTTP 401 can mean the local /echo endpoint requires authentication.
+    # It still proves that an HTTP server is responding on this loopback port.
     if [ "$RUNNING" = "$LATEST" ] &&
-       [ "$HTTP_CODE" = "200" ] &&
-       pgrep -x torrserver >/dev/null 2>&1; then
+       { [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; } &&
+       service_running; then
         OK=1
         break
     fi
