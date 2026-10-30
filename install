@@ -706,7 +706,7 @@ configure_torr_cache_inner() {
     CACHE_DIR="$DISK_ROOT/tscashe"
     say "Предлагается: $CACHE_DIR"
     say 'Кеш: 1024 МиБ (1073741824 байт); впереди: 95%; предзагрузка: 5% (51 МиБ)'
-    say 'Ограничение скорости загрузки: 6250 КБ/с (6103516 байт/с приблизительно)'
+    say 'Ограничение скорости загрузки: 6250 КБ/с (6400000 байт/с)'
     # Check all requested values, not just the cache path. An already
     # configured disk cache can still need the size/speed preset.
     if printf '%s' "$existing" |
