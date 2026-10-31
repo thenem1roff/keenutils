@@ -527,10 +527,46 @@ torr_present() {
 }
 torr_service() {
     TORR_INIT=''
+    # Prefer the init script shipped by the Entware torrserver package.
+    # A separate third-party S*torrserver* script may coexist.
+    if [ -x /opt/etc/init.d/S90torrserver ]; then
+        TORR_INIT=/opt/etc/init.d/S90torrserver
+        return 0
+    fi
     for init in /opt/etc/init.d/S*torrserver*; do
         if [ -x "$init" ]; then TORR_INIT=$init; break; fi
     done
     [ -n "$TORR_INIT" ]
+}
+torr_running() {
+    torr_service || return 1
+    # Stock Entware rc.func implements "check"; other service wrappers may
+    # implement "status". Test the service rather than just its init file.
+    "$TORR_INIT" check >/dev/null 2>&1 && return 0
+    "$TORR_INIT" status >/dev/null 2>&1 && return 0
+    return 1
+}
+ensure_torr_running() {
+    torr_service || { err 'Не найден исполняемый init-скрипт TorrServer.'; return 1; }
+    if torr_running; then
+        say 'TorrServer уже запущен; перезапуск не требуется.'
+        return 0
+    fi
+    say 'TorrServer установлен, но служба не работает. Запускаю...'
+    "$TORR_INIT" start ||
+        say 'Init-скрипт вернул ошибку запуска; проверяю фактическое состояние.'
+    torr_attempt=0
+    while [ "$torr_attempt" -lt 10 ]; do
+        if torr_running; then
+            say 'TorrServer запущен; состояние подтверждено службой.'
+            return 0
+        fi
+        torr_attempt=$((torr_attempt + 1))
+        sleep 1
+    done
+    err 'TorrServer не запустился: служба остаётся остановленной.'
+    err "Проверьте: $TORR_INIT check"
+    return 1
 }
 # Find the actual USB volume hosting Entware. /opt may be a symlink or bind mount.
 filesystem_id() {
@@ -796,6 +832,11 @@ watchdog_complete() {
     return 1
 }
 install_watchdog() {
+    # Keep the daemon available before installing or checking a watchdog.
+    # Without this, a watchdog can appear installed while TorrServer is dead.
+    [ -x /opt/sbin/torrserver ] ||
+        { err 'TorrServer не установлен. Сначала выберите пункт 1.'; return 1; }
+    ensure_torr_running || return 1
     # Independent pre-check: a complete installation is never run again.
     if watchdog_complete; then
         say 'TorrServer watchdog уже установлен и прописан в Cron (00 и 30 сек).'
@@ -806,7 +847,6 @@ install_watchdog() {
     else
         say 'Watchdog пока не установлен.'
     fi
-    torr_service || { err 'Служба TorrServer не найдена.'; return 1; }
     # The standalone installer installs missing dependencies, including Cron.
     fetch_and_run torr_watchdog TorrServer-watchdog || return 1
     # Independent post-check after the external installer exits.
@@ -823,8 +863,8 @@ install_torrserver() {
     fi
     [ -x /opt/sbin/torrserver ] ||
         { err 'Нет исполняемого /opt/sbin/torrserver.'; return 1; }
-    torr_service || { err 'Не найден исполняемый init-скрипт TorrServer.'; return 1; }
-    say 'TorrServer установлен: бинарник и служба проверены.'
+    ensure_torr_running || return 1
+    say 'TorrServer установлен: бинарник и запущенная служба проверены.'
 }
 
 update_torrserver() {
@@ -834,15 +874,17 @@ update_torrserver() {
     [ "$(uname -m)" = aarch64 ] ||
         { err 'Обновлятор TorrServer поддерживает только aarch64.'; return 1; }
     fetch_and_run torrserver TorrServer-updater || return 1
-    [ -x /opt/sbin/torrserver ] && torr_service ||
-        { err 'Не удалось проверить TorrServer после обновления.'; return 1; }
-    say 'TorrServer: проверка бинарника и службы после обновления выполнена.'
+    [ -x /opt/sbin/torrserver ] ||
+        { err 'После обновления бинарник TorrServer отсутствует.'; return 1; }
+    # Covers an updater no-op ("уже обновлён") with a stopped service.
+    ensure_torr_running || return 1
+    say 'TorrServer: проверка бинарника и запущенной службы после обновления выполнена.'
 }
 
 setup_torr_cache() {
     [ -x /opt/sbin/torrserver ] ||
         { err 'TorrServer не установлен. Сначала выберите пункт 1.'; return 1; }
-    torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
+    ensure_torr_running || return 1
     configure_torr_cache
 }
 
