@@ -15,6 +15,7 @@ on:
       - tests/keenkit-regressions.sh
       - tests/torr-cache-regression.sh
       - tests/torr-updater-regression.sh
+      - tests/torr-install-regressions.sh
       - .github/workflows/installer-check.yml
   pull_request:
     paths:
@@ -130,6 +131,8 @@ jobs:
         run: sh tests/installer-regressions.sh
       - name: TorrServer cache settings and mount regression tests
         run: sudo sh tests/torr-cache-regression.sh
+      - name: TorrServer install startup and dependent actions regressions
+        run: sudo sh tests/torr-install-regressions.sh
       - name: TorrServer updater stopped-service and rollback regressions
         run: sudo sh tests/torr-updater-regression.sh
       - name: Source catalog and original nfqws-menu delegation
