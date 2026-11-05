@@ -1512,6 +1512,46 @@ uninstall_menu() {
     done
 }
 
+# Launch the standalone Flowseal converter. Existing installations run locally;
+# the converter itself checks a small version marker and updates its own files.
+launch_flowseal_converter() {
+    fc_ref=${KEENUTILS_FLOWSEAL_REF:-main}
+    case "$fc_ref" in
+        ''|/*|*..*|*//*|*[!a-zA-Z0-9._/-]*)
+            err 'Недопустимая ветка конвертера.'
+            return 1 ;;
+    esac
+    if [ "$fc_ref" = main ]; then
+        fc_target=/opt/bin/keenutils-flowseal
+    else
+        # Feature-branch testing is isolated from the stable installation.
+        fc_target=/opt/bin/keenutils-flowseal-dev
+    fi
+    if [ -L "$fc_target" ]; then
+        err 'Конвертер: символическая ссылка вместо загрузчика. Запуск запрещён.'
+        return 1
+    fi
+    if [ ! -f "$fc_target" ]; then
+        ensure_mktemp || return 1
+        fc_temp=$(mktemp /opt/bin/.keenutils-flowseal.XXXXXX) || return 1
+        fc_url="https://raw.githubusercontent.com/thenem1roff/keenutils/$fc_ref/flowseal_converter"
+        if ! source_download_once "$fc_url" "$fc_temp" ||
+            ! sh -n "$fc_temp" ||
+            ! grep -Fq '# KeenUtils Flowseal converter bootstrap.' "$fc_temp"; then
+            rm -f "$fc_temp"
+            err 'Не удалось получить проверенный модуль конвертера.'
+            return 1
+        fi
+        chmod 700 "$fc_temp" && mv "$fc_temp" "$fc_target" || {
+            rm -f "$fc_temp"
+            err 'Не удалось сохранить модуль конвертера.'
+            return 1
+        }
+        say 'Модуль конвертера установлен локально.'
+    fi
+    sh "$fc_target"
+}
+
 # Compact status header. Local status is refreshed on each main-menu redraw.
 ROUTER_MODEL='Keenetic'
 KEENUTILS_UPDATE_STATE='unknown'
@@ -1636,6 +1676,7 @@ menu() {
     say '  6. HydraRoute Neo'
     say '  7. AWG Manager'
     say '  8. TorrServer'
+    say ' 77. Конвертер Flowseal → nfqws2'
     say ''
     say ' 88. Удаление программ'
     say ' 99. Обновить KeenUtils'
@@ -1657,6 +1698,7 @@ while :; do
         6|06) install_hydra ;;
         7|07) install_awg ;;
         8|08) torrserver_menu; continue ;;
+        77) launch_flowseal_converter; continue ;;
         88) uninstall_menu; continue ;;
         99) update_keenutils
             if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
