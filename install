@@ -143,6 +143,16 @@ ensure_mktemp() {
     fi
 }
 bootstrap_keenutils() {
+    # Explicit development mode: run a downloaded feature-branch copy locally
+    # without installing over /opt/bin/keenutils or changing the utils alias.
+    if [ "${KEENUTILS_FLOWSEAL_DEV_MODE:-0}" = 1 ]; then
+        [ "${KEENUTILS_FLOWSEAL_REF:-main}" != main ] ||
+            { err 'Укажите тестовую ветку KEENUTILS_FLOWSEAL_REF.'; return 1; }
+        [ -f "$0" ] && valid_keenutils "$0" ||
+            { err 'Тестовый install не прошёл проверку.'; return 1; }
+        say 'Тестовый режим Flowseal: установленный KeenUtils не изменён.'
+        return 0
+    fi
     case "$0" in
         /opt/bin/keenutils|keenutils|/opt/bin/utils|utils) return 0 ;;
     esac
