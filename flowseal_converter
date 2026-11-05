@@ -1,0 +1,150 @@
+#!/bin/sh
+# KeenUtils Flowseal converter bootstrap. Runs as a child of the main installer.
+# All code updates live here, not in install. Remote files come only from this repo.
+set -u
+export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+
+REF=${KEENUTILS_FLOWSEAL_REF:-main}
+case "$REF" in
+    ''|/*|*..*|*//*|*[!a-zA-Z0-9._/-]*)
+        printf 'Ошибка: недопустимая ветка конвертера.\n' >&2; exit 1 ;;
+esac
+BASE="https://raw.githubusercontent.com/thenem1roff/keenutils/$REF"
+if [ "$REF" = main ]; then
+    HOME_DIR=/opt/etc/keenutils/flowseal
+    LAUNCHER=/opt/bin/keenutils-flowseal
+else
+    # Isolated development runtime and saved strategies.
+    HOME_DIR=/opt/etc/keenutils/flowseal-dev
+    LAUNCHER=/opt/bin/keenutils-flowseal-dev
+fi
+RUNTIME="$HOME_DIR/runtime"
+CURRENT_FILE="$HOME_DIR/current.version"
+STAGE=''
+VERSION_TEMP=''
+cleanup() {
+    [ -z "$VERSION_TEMP" ] || rm -f "$VERSION_TEMP"
+    [ -z "$STAGE" ] || rm -rf "$STAGE"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+have() { command -v "$1" >/dev/null 2>&1; }
+error() { printf 'Ошибка Flowseal: %s\n' "$*" >&2; }
+yes_default() {
+    while :; do
+        printf '%s [Y/n]: ' "$1"
+        IFS= read -r answer || return 1
+        case "$answer" in ''|y|Y|yes|YES) return 0 ;; n|N|no|NO) return 1 ;; esac
+        printf 'Введите Y или n.\n'
+    done
+}
+fetch_file() {
+    src=$1
+    dest=$2
+    if have wget && wget -q -O "$dest" "$src" && [ -s "$dest" ]; then return 0; fi
+    if have curl && curl -fLSs --connect-timeout 8 --max-time 45 -o "$dest" "$src" &&
+        [ -s "$dest" ]; then return 0; fi
+    return 1
+}
+read_current() {
+    [ -f "$CURRENT_FILE" ] && [ ! -L "$CURRENT_FILE" ] || return 0
+    IFS= read -r CURRENT < "$CURRENT_FILE" || :
+}
+valid_version() {
+    case "$1" in ''|*[!a-zA-Z0-9._-]*|.*|*-.) return 1 ;; esac
+    [ "${#1}" -le 64 ]
+}
+need_python() {
+    if ! have python3; then
+        printf 'Для конвертера требуется Python 3.9+ (Entware).\n'
+        yes_default 'Установить python3?' || return 1
+        opkg update && opkg install python3 || return 1
+    fi
+    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' ||
+        { error 'Нужен Python версии 3.9 или новее.'; return 1; }
+}
+install_runtime() {
+    version=$1
+    STAGE=$(mktemp -d "$HOME_DIR/.flowseal-update.XXXXXX") || return 1
+    mkdir -p "$STAGE/zapret_keenetic" || return 1
+    for relative in flowseal_converter modules/flowseal/manager.py \
+                    modules/flowseal/zapret_keenetic/__init__.py \
+                    modules/flowseal/zapret_keenetic/compat.py \
+                    modules/flowseal/zapret_keenetic/converter.py \
+                    modules/flowseal/LICENSE; do
+        case "$relative" in
+            flowseal_converter) target="$STAGE/flowseal_converter" ;;
+            modules/flowseal/manager.py) target="$STAGE/manager.py" ;;
+            modules/flowseal/LICENSE) target="$STAGE/LICENSE" ;;
+            *) target="$STAGE/zapret_keenetic/${relative##*/}" ;;
+        esac
+        if ! fetch_file "$BASE/$relative" "$target"; then
+            error "Не удалось получить $relative"; return 1
+        fi
+    done
+    sh -n "$STAGE/flowseal_converter" || return 1
+    grep -Fq '# KeenUtils Flowseal converter bootstrap.' "$STAGE/flowseal_converter" ||
+        { error 'Неверный загрузчик'; return 1; }
+    python3 - "$STAGE" <<'PY' || return 1
+import ast
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for path in [root / "manager.py", *(root / "zapret_keenetic").glob("*.py")]:
+    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+PY
+    if [ -e "$RUNTIME/$version" ] || [ -L "$RUNTIME/$version" ]; then
+        error 'Каталог этой версии уже существует; перезапись запрещена.'
+        return 1
+    fi
+    chmod 700 "$STAGE/flowseal_converter" || return 1
+    mv "$STAGE" "$RUNTIME/$version" || return 1
+    STAGE=''
+    printf '%s\n' "$version" > "$HOME_DIR/.current.$$" || return 1
+    mv "$HOME_DIR/.current.$$" "$CURRENT_FILE" || return 1
+    # The launcher is replaced only after the complete runtime was installed.
+    if [ -L "$LAUNCHER" ]; then
+        error 'Ссылка вместо загрузчика: обновление остановлено.'
+        return 1
+    fi
+    cp "$RUNTIME/$version/flowseal_converter" "$HOME_DIR/.launcher.$$" &&
+        chmod 700 "$HOME_DIR/.launcher.$$" &&
+        mv "$HOME_DIR/.launcher.$$" "$LAUNCHER" || return 1
+    printf 'Конвертер обновлён: %s\n' "$version"
+}
+
+mkdir -p "$RUNTIME" "$HOME_DIR/strategies" || exit 1
+[ ! -L "$RUNTIME" ] && [ ! -L "$HOME_DIR/strategies" ] || {
+    error 'Обнаружена небезопасная символическая ссылка в хранилище.'; exit 1;
+}
+need_python || exit 1
+CURRENT=''
+read_current
+VERSION_TEMP=$(mktemp "$HOME_DIR/.flowseal-version.XXXXXX") || exit 1
+REMOTE=''
+if fetch_file "$BASE/flowseal.version" "$VERSION_TEMP"; then
+    IFS= read -r REMOTE < "$VERSION_TEMP" || :
+    if ! valid_version "$REMOTE"; then
+        error 'Неверная версия из источника.'
+        REMOTE=''
+    fi
+else
+    printf 'Не удалось проверить обновления; используется локальная версия.\n'
+fi
+
+if [ -n "$REMOTE" ] && [ "$REMOTE" != "$CURRENT" ]; then
+    if ! install_runtime "$REMOTE"; then
+        error 'Обновление не выполнено; предыдущая версия сохранена.'
+    fi
+    CURRENT=''
+    read_current
+fi
+if [ -z "$CURRENT" ] || [ ! -f "$RUNTIME/$CURRENT/manager.py" ]; then
+    error 'Нет установленного модуля. Проверьте соединение с GitHub.'
+    exit 1
+fi
+export KEENUTILS_FLOWSEAL_HOME="$HOME_DIR"
+python3 "$RUNTIME/$CURRENT/manager.py"
