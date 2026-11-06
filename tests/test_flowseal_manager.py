@@ -98,6 +98,24 @@ class FlowsealManagerTest(unittest.TestCase):
         self.assertEqual(manager.NFQWS2_CONF.read_bytes(), original)
         self.assertEqual(list(manager.TEMP.iterdir()), [])
 
+    def test_delete_strategy_also_removes_its_old_revisions(self):
+        identity = "flowseal-1.10.4-alt12"
+        saved = manager.STRATEGIES / identity
+        saved.mkdir()
+        info = {"source": "Flowseal", "name": "ALT12", "version": "1.10.4"}
+        (saved / "info.json").write_text(json.dumps(info), encoding="utf-8")
+        manager.HISTORY.mkdir()
+        old = manager.HISTORY / (identity + "-20261106-010000")
+        old.mkdir()
+        (old / "nfqws2.conf").write_text("older config", encoding="utf-8")
+        unrelated = manager.HISTORY / "flowseal-1.10.4-alt13-20261106-010000"
+        unrelated.mkdir()
+        with patch.object(manager, "prompt", side_effect=["3", ""]), redirect_stdout(io.StringIO()):
+            manager.show_strategy(saved, info)
+        self.assertFalse(saved.exists())
+        self.assertFalse(old.exists())
+        self.assertTrue(unrelated.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()
