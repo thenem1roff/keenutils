@@ -37,8 +37,8 @@ saved="$STRATEGIES/flowseal-1.10.4-alt13"
 test -f "$saved/info.json"
 test -f "$saved/nfqws2.conf"
 test -f "$saved/REPORT.md"
-test -f "$saved/lists/flowseal-list-google.list"
-test -f "$saved/blobs/tls_clienthello_sochi_park.bin"
+test -f "$saved/lists/flowseal-1.10.4-alt13-list-google.list"
+test -f "$saved/blobs/flowseal-1.10.4-alt13-tls_clienthello_sochi_park.bin"
 jq -e '.name=="ALT13" and .version=="1.10.4" and .game_ports==true and .state=="saved_only"' \
     "$saved/info.json" >/dev/null
 sh -n "$saved/nfqws2.conf"
