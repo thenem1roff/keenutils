@@ -40,6 +40,11 @@ def normalized_arguments(text: str) -> list[str]:
 
 
 class FlowsealParity(unittest.TestCase):
+    def test_pre_encoded_lua_matches_source(self):
+        lua = (ROOT / "modules/flowseal/hostfakesplit_alt1.lua").read_bytes()
+        prebuilt = (ROOT / "modules/flowseal/hostfakesplit_alt1.hex").read_text().strip()
+        self.assertEqual(prebuilt, lua.hex())
+
     def run_case(self, fixture: Path, enable_games: bool):
         with tempfile.TemporaryDirectory(prefix="flowseal-parity-") as scratch:
             root = Path(scratch)
@@ -76,8 +81,8 @@ class FlowsealParity(unittest.TestCase):
                 FLOWSEAL_GAMES="yes" if enable_games else "no",
                 FLOWSEAL_INTERFACE="eth3",
                 FLOWSEAL_ALT_LUA_HEX=(
-                    ROOT / "modules/flowseal/hostfakesplit_alt1.lua"
-                ).read_bytes().hex(),
+                    ROOT / "modules/flowseal/hostfakesplit_alt1.hex"
+                ).read_text().strip(),
             )
             call = subprocess.run(
                 ["awk", "-f", str(ROOT / "modules/flowseal/converter.awk"), str(source_file)],
