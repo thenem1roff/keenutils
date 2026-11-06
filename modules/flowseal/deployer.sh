@@ -238,7 +238,20 @@ restore_snapshot() {
 on_exit() {
     if [ "$TRANSACTION" = 1 ] && [ -n "$BACKUP" ]; then
         err 'Сбой установки: восстанавливается прежняя конфигурация.'
-        restore_snapshot "$BACKUP" || err "Аварийное восстановление не завершено: $BACKUP"
+        if restore_snapshot "$BACKUP"; then
+            if check_plain_file "$BACKUP/previous-active"; then
+                cp "$BACKUP/previous-active" "$ACTIVE" || :
+            else
+                rm -f "$ACTIVE"
+            fi
+            if check_plain_file "$BACKUP/previous-latest"; then
+                cp "$BACKUP/previous-latest" "$LATEST" || :
+            else
+                rm -f "$LATEST"
+            fi
+        else
+            err "Аварийное восстановление не завершено: $BACKUP"
+        fi
     fi
     [ -z "$STAGE" ] || rm -rf "$STAGE"
     if [ "$LOCKED" = 1 ]; then
@@ -304,6 +317,9 @@ do_apply() {
     if check_plain_file "$ACTIVE"; then
         cp "$ACTIVE" "$BACKUP/previous-active" || return 1
     fi
+    if check_plain_file "$LATEST"; then
+        cp "$LATEST" "$BACKUP/previous-latest" || return 1
+    fi
     printf '%s\n' "$SAVED" > "$BACKUP/target" || return 1
     TRANSACTION=1
     say "Резервная копия: $BACKUP"
@@ -353,7 +369,12 @@ do_undo() {
     else
         rm -f "$ACTIVE"
     fi
-    rm -f "$LATEST"
+    if check_plain_file "$backup/previous-latest"; then
+        cp "$backup/previous-latest" "$STORE/.latest.$" &&
+            mv "$STORE/.latest.$" "$LATEST" || return 1
+    else
+        rm -f "$LATEST"
+    fi
     : > "$backup/restored"
     say 'Предыдущий конфиг и состояние службы восстановлены.'
 }
