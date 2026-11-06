@@ -30,25 +30,31 @@ test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/no-enter.log")" 
 grep -Fq 'REPORT-DETAIL' "$work/no-enter.log"
 grep -Fq 'Нажмите Enter, чтобы вернуться к выбору пункта' "$work/no-enter.log"
 
-# Enter resumes the menu. Test all 3 pages and navigate back with 0.
-printf '1\n\n2\n\n3\n\n0\n' | show_strategy "$strategy" > "$work/pages.log"
+# Enter resumes the menu. Test all 4 read-only pages and navigate back with 0.
+printf '1\n\n2\n\n3\n\n4\n\n0\n' | show_strategy "$strategy" > "$work/pages.log"
 test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/pages.log")" -eq 7
-test "$(grep -Fc 'Нажмите Enter, чтобы вернуться к выбору пункта' "$work/pages.log")" -eq 3
+test "$(grep -Fc 'Нажмите Enter, чтобы вернуться к выбору пункта' "$work/pages.log")" -eq 4
 grep -Fq 'REPORT-DETAIL' "$work/pages.log"
 grep -Fq 'Конфигурация nfqws2.conf' "$work/pages.log"
 grep -Fq 'ISP_INTERFACE=' "$work/pages.log"
-grep -Fq 'Синтаксис конфигурации: OK' "$work/pages.log"
+grep -Fq 'Проверка совместимости nfqws2' "$work/pages.log"
+grep -Fq 'Сравнение с установленным nfqws2' "$work/pages.log"
 # Details must ALWAYS appear below a menu, not before it.
 awk '
     /KeenUtils \| Моя стратегия/ { latest_menu=NR; headers++ }
     /REPORT-DETAIL/ {if (!latest_menu || latest_menu>=NR) bad=1; report++}
     /ISP_INTERFACE=/ {if (!latest_menu || latest_menu>=NR) bad=1; config++}
-    /Синтаксис конфигурации: OK/ {if (!latest_menu || latest_menu>=NR) bad=1; validator++}
-    END {if (bad || headers!=7 || report!=1 || config!=1 || validator!=1) exit 1}
+    /Проверка совместимости nfqws2/ {if (!latest_menu || latest_menu>=NR) bad=1; validator++}
+    /Сравнение с установленным nfqws2/ {if (!latest_menu || latest_menu>=NR) bad=1; preview++}
+    END {if (bad || headers!=9 || report!=1 || config!=1 || validator!=1 || preview!=1) exit 1}
 ' "$work/pages.log"
 # The submenu must not interpret an empty Enter as the "Back" action.
 printf '\n0\n' | show_strategy "$strategy" > "$work/blank.log"
 test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/blank.log")" -eq 2
+# Applying requires explicit uppercase APPLY; arbitrary input must cancel.
+printf '5\nno\n\n0\n' | show_strategy "$strategy" > "$work/confirm.log"
+grep -Fq 'Для подтверждения введите APPLY' "$work/confirm.log"
+grep -Fq 'Действие отменено.' "$work/confirm.log"
 # Read-only pages leave stored strategies unchanged.
 test -f "$strategy/info.json"
 test -f "$strategy/nfqws2.conf"
