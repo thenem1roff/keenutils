@@ -422,11 +422,21 @@ show_strategy() {
             error 'Не удалось прочитать сведения о стратегии.'
             return 1
         }
-        if [ -f "$selected_dir/nfqws2.conf" ] && [ -r "$Nfqws2_CONF" ] &&
+        active=no
+        # Effective config keeps router-specific ISP/POLICY settings, so its
+        # bytes can differ from the saved template. Use deployment metadata.
+        state_file="$HOME_DIR/deployments/active"
+        if [ -f "$state_file" ] && [ ! -L "$state_file" ] &&
+            [ -f "$Nfqws2_CONF" ]; then
+            active_id=$(awk -F '\t' 'NR==1 {print $1}' "$state_file")
+            active_sha=$(awk -F '\t' 'NR==1 {print $2}' "$state_file")
+            if [ "$active_id" = "$(basename "$selected_dir")" ] &&
+                [ "$active_sha" = "$(sha256sum "$Nfqws2_CONF" | awk '{print $1}')" ]; then
+                active=yes
+            fi
+        elif [ -f "$selected_dir/nfqws2.conf" ] && [ -r "$Nfqws2_CONF" ] &&
             cmp -s "$selected_dir/nfqws2.conf" "$Nfqws2_CONF"; then
             active=yes
-        else
-            active=no
         fi
         clear_menu_screen
         strategy_menu_header
