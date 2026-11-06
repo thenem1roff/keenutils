@@ -91,7 +91,7 @@ ZIP Flowseal скачивается только при выборе **«Доб�
 ## Автоматические тесты
 
 ```sh
-sh -n install flowseal_converter
+sh -n install && sh -n flowseal_converter
 python3 -m unittest discover -s tests -p test_flowseal_manager.py -v
 ```
 
@@ -107,7 +107,7 @@ ZIP-макет и не требуют ни сетевого доступа, ни
 2. Раздельная загрузка бинарных шаблонов, не Windows-бинарников.
 3. Статическая проверка с установленным nfqws2 и просмотр различий.
 4. Применение с резервной копией, проверкой службы и откатом.
-5. Очистка / удаление всех принадлежащих модулю файлов и интеграция с 88.
+5. Очистка / удаление файлов модуля через собственное подменю, без расширения основного install.
 
 Original converter: https://github.com/Sxlenium/zapret-keenetic-converter
 License: `modules/flowseal/LICENSE` (MIT, copyright preserved).
