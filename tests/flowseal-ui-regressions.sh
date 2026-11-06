@@ -55,6 +55,17 @@ test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/blank.log")" -eq
 printf '5\nno\n\n0\n' | show_strategy "$strategy" > "$work/confirm.log"
 grep -Fq 'Для подтверждения введите APPLY' "$work/confirm.log"
 grep -Fq 'Действие отменено.' "$work/confirm.log"
+# Active status is read from a deployed config checksum, not from template equality.
+Nfqws2_CONF="$work/live.conf"
+printf '# preserved ISP settings\n' > "$Nfqws2_CONF"
+mkdir -p "$HOME_DIR/deployments"
+sha=$(sha256sum "$Nfqws2_CONF" | awk '{print $1}')
+printf 'flowseal-1.10.4-alt12\t%s\n' "$sha" > "$HOME_DIR/deployments/active"
+printf '0\n' | show_strategy "$strategy" > "$work/active.log"
+grep -Fq 'Статус: совпадает с рабочим конфигом' "$work/active.log"
+# Delete must be unavailable when active metadata identifies this strategy.
+printf '6\n\n0\n' | show_strategy "$strategy" > "$work/blocked-delete.log" 2>&1
+grep -Fq 'Удаление действующей конфигурации запрещено' "$work/blocked-delete.log"
 # Read-only pages leave stored strategies unchanged.
 test -f "$strategy/info.json"
 test -f "$strategy/nfqws2.conf"
