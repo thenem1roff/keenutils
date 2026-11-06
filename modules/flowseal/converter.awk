@@ -5,6 +5,9 @@ BEGIN {
     OUT=ENVIRON["FLOWSEAL_OUTPUT"]; GAMES=ENVIRON["FLOWSEAL_GAMES"]
     IFACE=ENVIRON["FLOWSEAL_INTERFACE"]; ALT_HEX=ENVIRON["FLOWSEAL_ALT_LUA_HEX"]
     ROOT="/opt/etc/nfqws2"
+    PREFIX=ENVIRON["FLOWSEAL_STRATEGY_ID"]
+    if(PREFIX=="")PREFIX="flowseal"
+    if(PREFIX !~ /^[a-zA-Z0-9._-]+$/ || length(PREFIX)>96)fail("Invalid strategy identifier")
     if (OUT=="" || (GAMES!="yes" && GAMES!="no")) fail("Invalid converter environment")
     if(IFACE=="")IFACE="eth3"
     if(IFACE !~ /^[A-Za-z0-9._-]+$/)fail("Invalid WAN interface")
@@ -140,7 +143,7 @@ function list_ref(raw,p,name,dest){
     if(name=="ipset-all.txt")return ROOT "/lists/ipset.list"
     if(name=="ipset-exclude.txt"||name=="ipset-exclude-user.txt")
         return ROOT "/lists/ipset_exclude.list"
-    dest=name;sub(/\.txt$/,"",dest);dest="flowseal-" dest ".list"
+    dest=name;sub(/\.txt$/,"",dest);dest=PREFIX "-" dest ".list"
     if(!(dest in lists_added)){
         print name "\t" dest >> (OUT "/lists.manifest")
         lists_added[dest]=1
@@ -369,8 +372,8 @@ function render(file,i,name,line){
     base[++base_count]="--lua-init=@" ROOT "/lua/zapret-antidpi.lua"
     for(i=1;i<=blob_count;i++){
         name=blob_order[i]
-        base[++base_count]="--blob=" blob_names[name] ":@" ROOT "/blobs/" name
-        print name "\t" blob_names[name] >> (OUT "/blobs.manifest")
+        base[++base_count]="--blob=" blob_names[name] ":@" ROOT "/blobs/" PREFIX "-" name
+        print name "\t" PREFIX "-" name "\t" blob_names[name] >> (OUT "/blobs.manifest")
     }
     if(requires_alt){
         if(ALT_HEX=="")fail("Lua source for altorder=1 missing")
