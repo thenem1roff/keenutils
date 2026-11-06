@@ -52,7 +52,6 @@ need_tool() {
 dependencies() {
     need_tool awk gawk || return 1
     need_tool jq jq || return 1
-    need_tool unzip unzip || return 1
     need_tool od coreutils-od || return 1
     need_tool tr coreutils || return 1
     need_tool sha256sum coreutils-sha256sum || return 1
@@ -61,68 +60,88 @@ dependencies() {
 read_release() {
     release_json=$1
     fetch "$RELEASE_URL" "$release_json" || {
-        error 'Не удалось получить сведения о последнем выпуске Flowseal.'
+        error 'Не удалось получить последний выпуск Flowseal.'
         return 1
     }
     FLOW_VERSION=$(jq -er '.tag_name | strings' "$release_json") || return 1
-    printf '%s\n' "$FLOW_VERSION" |
-        grep -Eq '^[0-9]+(\.[0-9]+){1,3}$' || {
-            error 'Версия выпуска Flowseal имеет неизвестный формат.'
-            return 1
-        }
-    zip_name="zapret-discord-youtube-$FLOW_VERSION.zip"
-    jq -e --arg n "$zip_name" '[.assets[] | select(.name == $n)] | length == 1' "$release_json" >/dev/null || {
-        error 'Не найден официальный ZIP-архив выбранного выпуска Flowseal.'
-        return 1
+    printf '%s\n' "$FLOW_VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,3}$' || {
+        error 'Неизвестный формат версии Flowseal.';return 1
     }
-    FLOW_URL="https://github.com/Flowseal/zapret-discord-youtube/releases/download/$FLOW_VERSION/$zip_name"
-    return 0
+    FLOW_URL="https://github.com/Flowseal/zapret-discord-youtube/releases/tag/$FLOW_VERSION"
+    FLOW_TREE_URL="https://api.github.com/repos/Flowseal/zapret-discord-youtube/git/trees/$FLOW_VERSION?recursive=1"
+    FLOW_RAW="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/$FLOW_VERSION"
 }
-check_archive_size() {
-    # Info-ZIP unzip -l prints uncompressed sizes, even for archive members that
-    # will not be extracted. Reject known archive bombs before streaming files.
-    unzip -l "$1" | awk '
-        /^--------/ {section++; next}
-        section==1 && $1 ~ /^[0-9]+$/ {
-            count++; total+=$1
-            if($1>8388608 || total>60000000 || count>500) bad=1
-        }
-        END {if(bad || count==0)exit 1}
-    '
+read_tree() {
+    rt_dest=$1
+    fetch "$FLOW_TREE_URL" "$rt_dest" || {
+        error "Не удалось получить дерево файлов Flowseal $FLOW_VERSION.";return 1
+    }
+    jq -e '.truncated == false and (.tree | type == "array")' "$rt_dest" >/dev/null || {
+        error 'GitHub вернул неполное дерево выпуска Flowseal.';return 1
+    }
+    FLOW_TREE_SHA=$(jq -er '.sha | strings' "$rt_dest") || return 1
+    printf '%s\n' "$FLOW_TREE_SHA" | grep -Eq '^[a-f0-9]{40}$' || {
+        error 'Некорректная контрольная метка дерева выпуска.';return 1
+    }
 }
-extract_safe() {
-    archive=$1; source=$2; members=$3
-    unzip -Z1 "$archive" > "$members" || { error 'Невозможно получить список файлов ZIP.';return 1; }
-    check_archive_size "$archive" || { error 'Архив слишком велик или имеет неправильную структуру.';return 1; }
-    count=0
-    while IFS= read -r item; do
-        case "$item" in
-            /*|*..*|*\\*|*'//'*) error 'Опасный путь внутри архива.';return 1 ;;
-        esac
-        case "$item" in
-            general*.bat|lists/*.txt|lists/*.txt.backup|bin/*.bin) rel=$item ;;
-            */general*.bat|*/lists/*.txt|*/lists/*.txt.backup|*/bin/*.bin)
-                rel=$(printf '%s\n' "$item" | sed 's#^[^/]*/##')
-                ;;
-            *) continue ;;
-        esac
-        printf '%s\n' "$rel" | grep -Eq \
-            '^(general[^/]*\.bat|lists/[A-Za-z0-9._-]+\.txt(\.backup)?|bin/[A-Za-z0-9._-]+\.bin)$' ||
-            { error 'Недопустимое имя извлекаемого файла.';return 1; }
-        target="$source/$rel"
-        [ ! -e "$target" ] && [ ! -L "$target" ] || {
-            error 'Повторяющееся имя файла в архиве.';return 1;
-        }
-        mkdir -p "$(dirname "$target")" || return 1
-        unzip -p "$archive" "$item" > "$target" || {
-            error "Ошибка распаковки $item";return 1;
-        }
-        [ "$(wc -c < "$target")" -le 8388608 ] || {
-            error 'Извлечённый файл слишком велик.';return 1;
-        }
-        case "$rel" in general*.bat) count=$((count+1)) ;; esac
-    done < "$members"
-    [ "$count" -gt 0 ] || { error 'В выпуске нет стратегий general*.bat.';return 1; }
+list_profiles() {
+    lp_tree=$1; lp_list=$2
+    jq -r '.tree[] | select(.type == "blob" and (.path | test("^general[ A-Za-z0-9()_-]*[.]bat$"))) | .path' "$lp_tree" |
+        sort > "$lp_list" || return 1
+    [ -s "$lp_list" ] || { error 'Стратегии general*.bat не найдены в выпуске.';return 1; }
+}
+encode_filename() {
+    printf '%s' "$1" | sed 's/ /%20/g; s/(/%28/g; s/)/%29/g'
+}
+get_profile() {
+    gp_name=$1; gp_dest=$2
+    printf '%s\n' "$gp_name" |
+        grep -Eq '^general[ A-Za-z0-9()_-]*[.]bat$' || return 1
+    gp_encoded=$(encode_filename "$gp_name")
+    fetch "$FLOW_RAW/$gp_encoded" "$gp_dest" || {
+        error "Не удалось скачать профиль $gp_name.";return 1
+    }
+    [ "$(wc -c < "$gp_dest")" -le 1048576 ] || {
+        error 'Слишком большой BAT-профиль.';return 1
+    }
+}
+tree_has_file() {
+    th_tree=$1; th_path=$2
+    jq -e --arg path "$th_path" 'any(.tree[]; .type == "blob" and .path == $path)' "$th_tree" >/dev/null
+}
+fetch_resource() {
+    fr_tree=$1;fr_source=$2;fr_kind=$3;fr_name=$4;fr_output=$5
+    case "$fr_kind" in lists|bin) : ;; *)return 1;;esac
+    printf '%s\n' "$fr_name" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+    case "$fr_name" in .|..|*..*)return 1;;esac
+    fr_path="$fr_kind/$fr_name"
+    if ! tree_has_file "$fr_tree" "$fr_path"; then
+        printf 'warning\tmissing-upstream-resource\t0\tНет файла в выпуске Flowseal: %s\n' \
+            "$fr_path" >> "$fr_output/diagnostics.tsv"
+        return 0
+    fi
+    mkdir -p "$fr_source/$fr_kind" || return 1
+    if ! fetch "$FLOW_RAW/$fr_path" "$fr_source/$fr_kind/$fr_name"; then
+        error "Не удалось скачать $fr_path из Flowseal $FLOW_VERSION.";return 1
+    fi
+    [ "$(wc -c < "$fr_source/$fr_kind/$fr_name")" -le 8388608 ] || {
+        error "Слишком большой файл $fr_path.";return 1
+    }
+}
+download_resources() {
+    dr_tree=$1;dr_source=$2;dr_output=$3
+    if [ -s "$dr_output/lists.manifest" ]; then
+        while IFS="$(printf '\t')" read -r dr_name dr_destination; do
+            [ -n "$dr_name" ] || continue
+            fetch_resource "$dr_tree" "$dr_source" lists "$dr_name" "$dr_output" || return 1
+        done < "$dr_output/lists.manifest"
+    fi
+    if [ -s "$dr_output/blobs.manifest" ]; then
+        while IFS="$(printf '\t')" read -r dr_name dr_destination dr_blob; do
+            [ -n "$dr_name" ] || continue
+            fetch_resource "$dr_tree" "$dr_source" bin "$dr_name" "$dr_output" || return 1
+        done < "$dr_output/blobs.manifest"
+    fi
 }
 identity() {
     ident=$(printf '%s' "$1" | sed 's/\.bat$//;s/^general (//;s/)$//;s/^general$/GENERAL/' |
@@ -134,24 +153,20 @@ friendly() {
     printf '%s\n' "$1" | sed 's/\.bat$//;s/^general (//;s/)$//;s/^general$/GENERAL/'
 }
 pick_profile() {
-    source=$1; options=$2; index=0
-    : > "$options"
+    options=$1;index=0
     message ""
     message "Flowseal $FLOW_VERSION — доступные стратегии:"
-    for file in "$source"/general*.bat; do
-        [ -f "$file" ] || continue
+    while IFS= read -r base; do
         index=$((index+1))
-        base=$(basename "$file")
         printf '%2s. %s\n' "$index" "$(friendly "$base")"
-        printf '%s\t%s\n' "$index" "$base" >> "$options"
-    done
+    done < "$options"
     message ' 0. Назад'
     while :; do
         printf 'Выберите стратегию: '
         IFS= read -r number || return 1
-        case "$number" in ''|0|00) return 1 ;; esac
-        case "$number" in *[!0-9]*|'')message 'Неверный номер.';continue;; esac
-        SELECTED=$(awk -F '\t' -v id="$number" '$1==id {print $2;exit}' "$options")
+        case "$number" in ''|0|00)return 1;;esac
+        case "$number" in *[!0-9]*)message 'Неверный номер.';continue;;esac
+        SELECTED=$(sed -n "${number}p" "$options")
         [ -n "$SELECTED" ] && return 0
         message 'Неверный номер.'
     done
@@ -209,7 +224,6 @@ convert_profile() {
         error 'Полученная конфигурация имеет ошибку синтаксиса shell.'
         return 1
     }
-    copy_resources "$source" "$output" || return 1
     return 0
 }
 save_report() {
