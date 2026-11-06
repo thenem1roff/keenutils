@@ -343,8 +343,15 @@ def show_strategy(directory: Path, info: dict[str, object]) -> None:
             if ask_yes(f"Удалить {label} со всеми её сохранёнными файлами?"):
                 if directory.is_symlink() or not directory.is_dir():
                     raise ManagerError("Небезопасный путь стратегии.")
+                # Deleting a saved strategy also removes its older revisions.
+                # A user-confirmed deletion must not leave hidden copies behind.
+                prefix = directory.name + "-"
                 shutil.rmtree(directory)
-                print("Стратегия удалена.")
+                if HISTORY.is_dir() and not HISTORY.is_symlink():
+                    for older in HISTORY.iterdir():
+                        if older.name.startswith(prefix) and older.is_dir() and not older.is_symlink():
+                            shutil.rmtree(older)
+                print("Стратегия и её прежние редакции удалены.")
                 return
         else:
             print("Неизвестный пункт.")
