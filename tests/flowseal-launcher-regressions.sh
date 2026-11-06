@@ -31,12 +31,14 @@ printf '77\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null > /tmp/keenutils-flowseal-navigation.log
 
 grep -Fq '77. Конвертер Flowseal' /tmp/keenutils-flowseal-navigation.log
-# Visual section break after TorrServer, before standalone converter.
+# Two clearly named sections, with 77/88/99 adjacent in Utilities.
+grep -Fq '============== Установка ===============' /tmp/keenutils-flowseal-navigation.log
+grep -Fq '=============== Утилиты ================' /tmp/keenutils-flowseal-navigation.log
 awk '
-    /8[.] TorrServer/ {found=1;next}
-    found && /^[[:space:]]*$/ {blank=1;next}
-    found && /77[.] Конвертер Flowseal/ {if(blank) ok=1;found=0;blank=0}
-    END {exit !ok}
+    /77[.] Конвертер Flowseal/ {
+        if (getline > 0 && $0 ~ /88[.] Удаление программ/) adjacent=1
+    }
+    END { exit !adjacent }
 ' /tmp/keenutils-flowseal-navigation.log
 grep -Fq 'FLOWSEAL_CHILD_MENU' /tmp/keenutils-flowseal-navigation.log
 grep -Fq 'FLOWSEAL_CHILD_RETURN' /tmp/keenutils-flowseal-navigation.log
