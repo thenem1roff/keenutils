@@ -1,6 +1,6 @@
 #!/bin/sh
 # Root-only CI mocks; no router packages or settings are modified by tests.
-set -eu
+set -eux
 mkdir -p /opt/bin /opt/etc /opt/sbin
 cp ./install /opt/bin/keenutils
 chmod 755 /opt/bin/keenutils
