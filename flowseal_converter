@@ -69,64 +69,10 @@ install_runtime() {
         { error 'Неверный формат модуля';return 1; }
     grep -Fq '# Flowseal winws .bat -> nfqws2 configuration' "$STAGE/converter.awk" ||
         { error 'Неверный формат AWK-конвертера';return 1; }
-    # Pre-generated Lua hex is a plain text asset, not a dependency on od.
-    [ -s "$STAGE/hostfakesplit_alt1.hex" ] &&
-        grep -Eq '^[0123456789abcdef]+
-        mkdir "$STAGE/.check" || return 1
-        printf 'winws.exe --filter-tcp=443 --dpi-desync=fake\n' > "$STAGE/.check.bat"
-        FLOWSEAL_OUTPUT="$STAGE/.check" FLOWSEAL_GAMES=no \
-            FLOWSEAL_INTERFACE=eth3 FLOWSEAL_ALT_LUA_HEX=41 \
-            awk -f "$STAGE/converter.awk" "$STAGE/.check.bat" >/dev/null 2>&1 &&
-            sh -n "$STAGE/.check/nfqws2.conf" || {
-                error 'AWK-конвертер не прошёл проверку преобразования.'
-                return 1
-            }
-        rm -rf "$STAGE/.check" "$STAGE/.check.bat"
-    fi
-    [ ! -e "$RUNTIME/$version" ] && [ ! -L "$RUNTIME/$version" ] || {
-        error 'Каталог новой версии уже существует; перезапись запрещена.'
+    if [ ! -s "$STAGE/hostfakesplit_alt1.hex" ]; then
+        error 'Не найден подготовленный Lua hex-файл.'
         return 1
-    }
-    chmod 700 "$STAGE/menu.sh" "$STAGE/flowseal_converter" || return 1
-    mv "$STAGE" "$RUNTIME/$version" || return 1
-    STAGE=''
-    printf '%s\n' "$version" > "$HOME_DIR/.current.$$" || return 1
-    mv "$HOME_DIR/.current.$$" "$CURRENT_FILE" || return 1
-    [ ! -L "$LAUNCHER" ] || { error 'Символическая ссылка вместо загрузчика';return 1; }
-    cp "$RUNTIME/$version/flowseal_converter" "$HOME_DIR/.launcher.$$" &&
-        chmod 700 "$HOME_DIR/.launcher.$$" &&
-        mv "$HOME_DIR/.launcher.$$" "$LAUNCHER" || return 1
-    printf 'Конвертер обновлён: %s\n' "$version"
-}
-mkdir -p "$RUNTIME" "$HOME_DIR/strategies" || exit 1
-[ ! -L "$HOME_DIR" ] && [ ! -L "$RUNTIME" ] &&
-    [ ! -L "$HOME_DIR/strategies" ] || {
-        error 'Небезопасная символическая ссылка в хранилище.'
-        exit 1
-    }
-read_current
-TEMP_FILE=$(mktemp "$HOME_DIR/.flowseal-version.XXXXXX") || exit 1
-REMOTE=''
-if fetch "$BASE/flowseal.version" "$TEMP_FILE"; then
-    IFS= read -r REMOTE < "$TEMP_FILE" || :
-    if ! valid_version "$REMOTE"; then error 'Некорректная удалённая версия';REMOTE='';fi
-else
-    printf 'GitHub недоступен: запускается локальная версия, если она сохранена.\n'
-fi
-if [ -n "$REMOTE" ] && [ "$REMOTE" != "$CURRENT" ]; then
-    install_runtime "$REMOTE" || error 'Обновление не выполнено; локальная версия сохранена.'
-    read_current
-fi
-if [ -z "$CURRENT" ] || [ ! -f "$RUNTIME/$CURRENT/menu.sh" ]; then
-    error 'Нет установленного конвертера. Проверьте доступность GitHub.'
-    exit 1
-fi
-export KEENUTILS_FLOWSEAL_HOME="$HOME_DIR"
-sh "$RUNTIME/$CURRENT/menu.sh"
- "$STAGE/hostfakesplit_alt1.hex" || {
-            error 'Недопустимый файл совместимости Lua.'
-            return 1
-        }
+    fi
     if have awk; then
         mkdir "$STAGE/.check" || return 1
         printf 'winws.exe --filter-tcp=443 --dpi-desync=fake\n' > "$STAGE/.check.bat"
