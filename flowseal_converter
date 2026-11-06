@@ -62,11 +62,11 @@ install_runtime() {
     done
     sh -n "$STAGE/flowseal_converter" && sh -n "$STAGE/menu.sh" || return 1
     grep -Fq '# KeenUtils Flowseal converter bootstrap.' "$STAGE/flowseal_converter" ||
-        {error 'Неверный формат загрузчика';return 1;}
+        { error 'Неверный формат загрузчика';return 1; }
     grep -Fq '# Independent Flowseal -> nfqws2 manager;' "$STAGE/menu.sh" ||
-        {error 'Неверный формат модуля';return 1;}
+        { error 'Неверный формат модуля';return 1; }
     grep -Fq '# Flowseal winws .bat -> nfqws2 configuration' "$STAGE/converter.awk" ||
-        {error 'Неверный формат AWK-конвертера';return 1;}
+        { error 'Неверный формат AWK-конвертера';return 1; }
     if have awk; then
         mkdir "$STAGE/.check" || return 1
         printf 'winws.exe --filter-tcp=443 --dpi-desync=fake\n' > "$STAGE/.check.bat"
@@ -88,7 +88,7 @@ install_runtime() {
     STAGE=''
     printf '%s\n' "$version" > "$HOME_DIR/.current.$$" || return 1
     mv "$HOME_DIR/.current.$$" "$CURRENT_FILE" || return 1
-    [ ! -L "$LAUNCHER" ] || {error 'Символическая ссылка вместо загрузчика';return 1;}
+    [ ! -L "$LAUNCHER" ] || { error 'Символическая ссылка вместо загрузчика';return 1; }
     cp "$RUNTIME/$version/flowseal_converter" "$HOME_DIR/.launcher.$$" &&
         chmod 700 "$HOME_DIR/.launcher.$$" &&
         mv "$HOME_DIR/.launcher.$$" "$LAUNCHER" || return 1
