@@ -182,13 +182,13 @@ copy_resources() {
         done < "$output/lists.manifest"
     }
     test -f "$output/blobs.manifest" && {
-        while IFS="$(printf '\t')" read -r src blob_id; do
-            case "$src:$blob_id" in
+        while IFS="$(printf '\t')" read -r src dest blob_id; do
+            case "$src:$dest:$blob_id" in
                 *[!A-Za-z0-9._:-]*|*..*)error 'Недопустимый BIN-путь.';return 1;;
             esac
             if [ -f "$source/bin/$src" ]; then
                 mkdir -p "$output/blobs"
-                cp "$source/bin/$src" "$output/blobs/$src" || return 1
+                cp "$source/bin/$src" "$output/blobs/$dest" || return 1
             else
                 printf 'warning\tmissing-blob\t0\tНет бинарного шаблона %s\n' "$src" >> "$output/diagnostics.tsv"
             fi
@@ -203,7 +203,7 @@ convert_profile() {
     hex=$(od -An -tx1 -v "$RUNTIME/hostfakesplit_alt1.lua" | tr -d ' \n') || return 1
     [ -n "$hex" ] || { error 'Отсутствует код Lua-совместимости.';return 1; }
     FLOWSEAL_OUTPUT="$output" FLOWSEAL_GAMES="$games" FLOWSEAL_INTERFACE="$WAN" \
-        FLOWSEAL_ALT_LUA_HEX="$hex" \
+        FLOWSEAL_ALT_LUA_HEX="$hex" FLOWSEAL_STRATEGY_ID="${STRATEGY_ID:-flowseal}" \
         awk -f "$RUNTIME/converter.awk" "$source/$profile" || return 1
     [ -s "$output/nfqws2.conf" ] && sh -n "$output/nfqws2.conf" || {
         error 'Полученная конфигурация имеет ошибку синтаксиса shell.'
