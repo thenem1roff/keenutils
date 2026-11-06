@@ -52,7 +52,6 @@ need_tool() {
 dependencies() {
     need_tool awk gawk || return 1
     need_tool jq jq || return 1
-    need_tool od coreutils-od || return 1
     need_tool tr coreutils || return 1
     need_tool sha256sum coreutils-sha256sum || return 1
     (have wget || have curl) || need_tool curl curl || return 1
@@ -227,8 +226,26 @@ convert_profile() {
     source=$1; profile=$2; output=$3; games=$4
     mkdir -p "$output" || return 1
     wan_interface
-    hex=$(od -An -tx1 -v "$RUNTIME/hostfakesplit_alt1.lua" | tr -d ' \n') || return 1
-    [ -n "$hex" ] || { error 'Отсутствует код Lua-совместимости.';return 1; }
+    # The Lua compatibility code was converted to hex at build time.
+    # BusyBox od does not support -An/-tx1, so no runtime hex tools are needed.
+    hex_file="$RUNTIME/hostfakesplit_alt1.hex"
+    if [ ! -r "$hex_file" ]; then
+        error 'Отсутствует подготовленный код Lua-совместимости.'
+        return 1
+    fi
+    IFS= read -r hex < "$hex_file" || {
+        error 'Не удалось прочитать код Lua-совместимости.'
+        return 1
+    }
+    case "$hex" in
+        ''|*[!0123456789abcdef]*)
+            error 'Некорректный hex-код Lua-совместимости.'
+            return 1 ;;
+    esac
+    if [ "${#hex}" -gt 16384 ] || [ "$((${#hex} % 2))" -ne 0 ]; then
+        error 'Недопустимый размер hex-кода Lua.'
+        return 1
+    fi
     FLOWSEAL_OUTPUT="$output" FLOWSEAL_GAMES="$games" FLOWSEAL_INTERFACE="$WAN" \
         FLOWSEAL_ALT_LUA_HEX="$hex" FLOWSEAL_STRATEGY_ID="${STRATEGY_ID:-flowseal}" \
         awk -f "$RUNTIME/converter.awk" "$source/$profile" || return 1
