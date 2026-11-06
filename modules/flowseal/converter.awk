@@ -329,11 +329,14 @@ function translate(p,i,key,value,any,cut,modes,n,j,mode,payload,spec_count,curmo
             diagnostic("warning","unsupported-option","Skipped --" key,p)
     }
 }
-function escape_config(s, q){
-    q=sprintf("%c",96)
-    gsub(/\\/,"\\\\",s);gsub(/"/,"\\\"",s)
-    gsub(/\$/,"\\$",s);gsub(q,"\\" q,s)
-    return s
+function escape_config(s, i,c,escaped,q){
+    escaped="";q=sprintf("%c",96)
+    for(i=1;i<=length(s);i++){
+        c=substr(s,i,1)
+        if(c=="\\"||c=="\""||c=="$"||c==q)escaped=escaped "\\" c
+        else escaped=escaped c
+    }
+    return escaped
 }
 function write_assignment(name,which,file, i,j,k,text,line){
     text=""
