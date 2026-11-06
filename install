@@ -1686,7 +1686,7 @@ menu() {
         say '----------------------------------------'
         printf '%s%s%s\n' "$UI_YELLOW" 'Доступно обновление KeenUtils → 99' "$UI_RESET"
     fi
-    say '----------------------------------------'
+    say '============== Установка ==============='
     say '  1. nfqws'
     say '  2. nfqws2'
     say '  3. nfqws-web'
@@ -1696,8 +1696,8 @@ menu() {
     say '  7. AWG Manager'
     say '  8. TorrServer'
     say ''
+    say '=============== Утилиты ================'
     say ' 77. Конвертер Flowseal → nfqws2'
-    say ''
     say ' 88. Удаление программ'
     say ' 99. Обновить KeenUtils'
     say ' 00. Выход'
