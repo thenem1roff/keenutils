@@ -1695,6 +1695,7 @@ menu() {
     say '  6. HydraRoute Neo'
     say '  7. AWG Manager'
     say '  8. TorrServer'
+    say ''
     say ' 77. Конвертер Flowseal → nfqws2'
     say ''
     say ' 88. Удаление программ'
