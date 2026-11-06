@@ -33,6 +33,19 @@ cat > "$work/release.json" <<'JSON'
 {"tag_name":"1.10.4"}
 JSON
 : > "$work/requests.log"
+# Simulate the Entware jq build without ONIGURUMA. Regex-based jq expressions
+# must fail in this test even though Ubuntu's jq normally supports them.
+JQ_NATIVE=$(command -v jq)
+jq() {
+    for jq_arg in "$@"; do
+        case "$jq_arg" in
+            *'test('*|*'match('*|*'sub('*) 
+                printf 'jq: regex functions are unavailable on Entware\n' >&2
+                return 71 ;;
+        esac
+    done
+    "$JQ_NATIVE" "$@"
+}
 fetch() {
     printf '%s\n' "$1" >> "$work/requests.log"
     case "$1" in
