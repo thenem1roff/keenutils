@@ -17,7 +17,7 @@ start "zapret" "%BIN%winws.exe" --wf-tcp=80,443,%GameFilterTCP% --wf-udp=443,%Ga
 --filter-tcp=80,443 --dpi-desync=fake,hostfakesplit --dpi-desync-fooling=ts --dpi-desync-hostfakesplit-mod=host=mail.ru,altorder=1 --dpi-desync-fake-tls="%BIN%tls.bin" --dpi-desync-repeats=5 --new ^
 --filter-tcp=%GameFilterTCP% --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=5
 BAT
-lua_hex=$(od -An -tx1 -v modules/flowseal/hostfakesplit_alt1.lua | tr -d ' \n')
+lua_hex=$(cat modules/flowseal/hostfakesplit_alt1.hex)
 test -n "$lua_hex"
 FLOWSEAL_OUTPUT="$tmp/output" FLOWSEAL_GAMES=no FLOWSEAL_INTERFACE=eth3 \
     FLOWSEAL_ALT_LUA_HEX="$lua_hex" \
