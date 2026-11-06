@@ -1550,6 +1550,11 @@ launch_flowseal_converter() {
             ! sh -n "$fc_temp" ||
             ! grep -Fq '# KeenUtils Flowseal converter bootstrap.' "$fc_temp"; then
             rm -f "$fc_temp"
+            if [ -f "$fc_target" ]; then
+                say 'Обновление загрузчика недоступно; запускаю локальную версию.'
+                sh "$fc_target"
+                return $?
+            fi
             err 'Не удалось получить проверенный модуль конвертера.'
             return 1
         fi
