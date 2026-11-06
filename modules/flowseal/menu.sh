@@ -380,8 +380,10 @@ strategy_menu_header() {
     message '----------------------------------------'
     message ' 1. Информация и предупреждения'
     message ' 2. Просмотреть nfqws2.conf'
-    message ' 3. Проверить синтаксис и ресурсы (без применения)'
-    message ' 4. Удалить стратегию'
+    message ' 3. Проверить совместимость и ресурсы'
+    message ' 4. Сравнить с текущей конфигурацией'
+    message ' 5. Применить стратегию'
+    message ' 6. Удалить стратегию'
     message ' 0. Назад'
 }
 strategy_show_page() {
@@ -399,9 +401,13 @@ strategy_show_page() {
             message ''
             cat "$selected_dir/nfqws2.conf" ;;
         3)
-            message 'Проверка синтаксиса и ресурсов'
+            message 'Проверка совместимости nfqws2'
             message ''
-            sh "$RUNTIME/validator.sh" "$selected_dir" || : ;;
+            sh "$RUNTIME/deployer.sh" check "$selected_dir" || : ;;
+        4)
+            message 'Сравнение с установленным nfqws2'
+            message ''
+            sh "$RUNTIME/deployer.sh" preview "$selected_dir" || : ;;
     esac
     pause_menu
 }
@@ -429,12 +435,29 @@ show_strategy() {
         case "$choice" in
             0|00) return 0 ;;
             '') continue ;;
-            1|2|3)
+            1|2|3|4)
                 # Menu always appears ABOVE the requested content.
                 # On Enter, clear the page and redraw the menu.
                 strategy_show_page "$choice" || return 0 ;;
-            4)
-                if [ "$active" = yes ]; then
+            5)
+                clear_menu_screen
+                strategy_menu_header
+                message '----------------------------------------'
+                message 'ПРИМЕНЕНИЕ СТРАТЕГИИ — изменит рабочую конфигурацию nfqws2.'
+                message 'Автоматически создаётся резервная копия и выполняется откат при ошибке.'
+                printf 'Для подтверждения введите APPLY: '
+                IFS= read -r confirmation || return 0
+                if [ "$confirmation" = APPLY ]; then
+                    sh "$RUNTIME/deployer.sh" apply "$selected_dir" ||
+                        error 'Применение не завершено; проверьте отчёт и состояние службы.'
+                else
+                    message 'Действие отменено.'
+                fi
+                pause_menu || return 0 ;;
+            6)
+                if [ "$active" = yes ] ||
+                    { [ -f "$HOME_DIR/deployments/active" ] &&
+                      grep -Fq "$(basename "$selected_dir")" "$HOME_DIR/deployments/active"; }; then
                     error 'Удаление действующей конфигурации запрещено.'
                     pause_menu || return 0
                     continue
@@ -484,6 +507,45 @@ saved_menu() {
         fi
     done
 }
+deployment_menu() {
+    while :; do
+        clear_menu_screen
+        message '======== KeenUtils | nfqws2 ========'
+        message ' 1. Состояние службы и активная стратегия'
+        message ' 2. Резервные копии'
+        message ' 3. Восстановить предыдущую конфигурацию'
+        message ' 0. Назад'
+        printf 'Выбор: '
+        IFS= read -r select_action || return 0
+        case "$select_action" in
+            ''|0|00) return 0 ;;
+            1)
+                clear_menu_screen
+                message 'Состояние nfqws2'
+                sh "$RUNTIME/deployer.sh" status || :
+                pause_menu || return 0 ;;
+            2)
+                clear_menu_screen
+                sh "$RUNTIME/deployer.sh" history || :
+                pause_menu || return 0 ;;
+            3)
+                clear_menu_screen
+                message 'Восстановление конфигурации из последней резервной копии.'
+                message 'Работающая служба будет перезапущена, если это необходимо.'
+                printf 'Для подтверждения введите ROLLBACK: '
+                IFS= read -r confirmation || return 0
+                if [ "$confirmation" = ROLLBACK ]; then
+                    sh "$RUNTIME/deployer.sh" undo ||
+                        error 'Откат не завершён. Проверьте резервные копии.'
+                else
+                    message 'Действие отменено.'
+                fi
+                pause_menu || return 0 ;;
+            *) message 'Неизвестный пункт.'
+               pause_menu || return 0 ;;
+        esac
+    done
+}
 main() {
     [ -d "$HOME_DIR" ] && [ ! -L "$HOME_DIR" ] || {
         error 'Некорректный каталог данных конвертера.';return 1;
@@ -497,14 +559,16 @@ main() {
         message '======== KeenUtils | Flowseal → nfqws2 ========'
         message ' 1. Добавить стратегию'
         message ' 2. Мои стратегии'
+        message ' 3. Активная стратегия, резервные копии и откат'
         message ' 0. Назад в KeenUtils'
-        message ' Разработка: сохранение без применения к роутеру.'
+        message ' Тестовая версия: применение с резервной копией и откатом.'
         printf 'Выберите пункт: '
         IFS= read -r choice || return 0
         case "$choice" in
             ''|0|00) return 0 ;;
             1) add_strategy || : ;;
             2) dependencies && saved_menu || : ;;
+            3) deployment_menu || : ;;
             *)message 'Неизвестный пункт.' ;;
         esac
     done
