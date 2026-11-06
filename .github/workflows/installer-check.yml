@@ -9,6 +9,8 @@ on:
       - tests/test_flowseal_manager.py
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
+      - tests/test_flowseal_equivalence.py
+      - 'tests/fixtures/flowseal/**'
       - torr_watchdog
       - torrserver
       - sources.conf
@@ -32,6 +34,8 @@ on:
       - tests/test_flowseal_manager.py
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
+      - tests/test_flowseal_equivalence.py
+      - 'tests/fixtures/flowseal/**'
       - torr_watchdog
       - torrserver
       - sources.conf
@@ -141,6 +145,8 @@ jobs:
 
       - name: Flowseal conversion and safe ZIP import (offline)
         run: python3 -m unittest discover -s tests -p test_flowseal_manager.py -v
+      - name: Compare Shell AWK conversion with Python reference on Flowseal fixtures (CI only)
+        run: python3 -m unittest discover -s tests -p test_flowseal_equivalence.py -v
       - name: Shell AWK Flowseal conversion and validation (no Python)
         run: sh tests/flowseal-converter-regressions.sh
       - name: Flowseal standalone child and return to main menu
