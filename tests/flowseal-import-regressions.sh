@@ -42,6 +42,11 @@ test -f "$saved/blobs/flowseal-1.10.4-alt13-tls_clienthello_sochi_park.bin"
 jq -e '.name=="ALT13" and .version=="1.10.4" and .game_ports==true and .state=="saved_only"' \
     "$saved/info.json" >/dev/null
 sh -n "$saved/nfqws2.conf"
+check_status=0
+sh "$RUNTIME/validator.sh" "$saved" > "$work/validation.log" || check_status=$?
+[ "$check_status" -eq 2 ]
+grep -Fq 'Требует переноса:' "$work/validation.log"
+grep -Fq 'Применение пока отключено' "$work/validation.log"
 grep -Fq 'PROFILES_WRITTEN=' "$saved/stats.txt"
 ! grep -Fq 'Python' "$work/import.log"
 # Re-run import and decline replacement: previous saved config must be unchanged.
