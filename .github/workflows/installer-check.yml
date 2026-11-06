@@ -9,6 +9,7 @@ on:
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
+      - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
@@ -35,6 +36,7 @@ on:
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
+      - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
@@ -173,3 +175,10 @@ jobs:
         run: sudo sh tests/menu-navigation-regressions.sh
       - name: Self-uninstall and preservation regression tests
         run: sudo sh tests/self-uninstall-regressions.sh
+
+  flowseal-bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap local module, cached startup and offline fallback (no Python)
+        run: sudo sh tests/flowseal-bootstrap-regressions.sh
