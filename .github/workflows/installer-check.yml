@@ -53,9 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: POSIX shell syntax
-        run: sh -n install && sh -n flowseal_converter && sh -n modules/flowseal/menu.sh && sh -n torr_watchdog && sh -n torrserver
+        run: sh -n install && sh -n flowseal_converter && sh -n modules/flowseal/menu.sh && sh -n modules/flowseal/validator.sh && sh -n torr_watchdog && sh -n torrserver
       - name: ShellCheck errors
-        run: shellcheck --severity=error --shell=sh install flowseal_converter modules/flowseal/menu.sh torr_watchdog torrserver
+        run: shellcheck --severity=error --shell=sh install flowseal_converter modules/flowseal/menu.sh modules/flowseal/validator.sh torr_watchdog torrserver
       - name: Menu smoke test
         run: |
           sudo mkdir -p /opt/bin /opt/etc
