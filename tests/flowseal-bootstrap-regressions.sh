@@ -33,6 +33,7 @@ test -f /opt/bin/keenutils-flowseal-dev
 installed_version=$(cat /opt/etc/keenutils/flowseal-dev/current.version)
 test "$installed_version" = "$(cat flowseal.version)"
 test -f "/opt/etc/keenutils/flowseal-dev/runtime/$installed_version/converter.awk"
+test -s "/opt/etc/keenutils/flowseal-dev/runtime/$installed_version/hostfakesplit_alt1.hex"
 test ! -e "/opt/etc/keenutils/flowseal-dev/runtime/$installed_version/manager.py"
 # No re-download of module files on a repeat launch: only version marker.
 : > /tmp/flowseal-bootstrap-fetch.log
