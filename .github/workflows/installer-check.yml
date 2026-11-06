@@ -9,6 +9,7 @@ on:
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
+      - tests/flowseal-ui-regressions.sh
       - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
@@ -36,6 +37,7 @@ on:
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
+      - tests/flowseal-ui-regressions.sh
       - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
@@ -153,6 +155,8 @@ jobs:
         run: sh tests/flowseal-converter-regressions.sh
       - name: Offline Flowseal ZIP release import and saved-strategy integration
         run: sh tests/flowseal-import-regressions.sh
+      - name: Flowseal saved strategy menu Enter and details placement
+        run: sh tests/flowseal-ui-regressions.sh
       - name: Flowseal standalone child and return to main menu
         run: sudo sh tests/flowseal-launcher-regressions.sh
       - name: Entware status and confirmation regression tests
