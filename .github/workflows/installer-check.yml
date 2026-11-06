@@ -8,6 +8,7 @@ on:
       - 'modules/flowseal/**'
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
+      - tests/flowseal-import-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
@@ -33,6 +34,7 @@ on:
       - 'modules/flowseal/**'
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
+      - tests/flowseal-import-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
@@ -147,6 +149,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_flowseal_equivalence.py -v
       - name: Shell AWK Flowseal conversion and validation (no Python)
         run: sh tests/flowseal-converter-regressions.sh
+      - name: Offline Flowseal ZIP release import and saved-strategy integration
+        run: sh tests/flowseal-import-regressions.sh
       - name: Flowseal standalone child and return to main menu
         run: sudo sh tests/flowseal-launcher-regressions.sh
       - name: Entware status and confirmation regression tests
