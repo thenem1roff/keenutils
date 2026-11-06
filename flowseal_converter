@@ -53,7 +53,8 @@ install_runtime() {
     version=$1
     STAGE=$(mktemp -d "$HOME_DIR/.flowseal-update.XXXXXX") || return 1
     for relative in flowseal_converter modules/flowseal/menu.sh \
-                    modules/flowseal/validator.sh modules/flowseal/converter.awk \
+                    modules/flowseal/validator.sh modules/flowseal/deployer.sh \
+                    modules/flowseal/converter.awk \
                     modules/flowseal/hostfakesplit_alt1.lua \
                     modules/flowseal/hostfakesplit_alt1.hex modules/flowseal/LICENSE; do
         target="$STAGE/${relative##*/}"
@@ -62,7 +63,7 @@ install_runtime() {
         fi
     done
     sh -n "$STAGE/flowseal_converter" && sh -n "$STAGE/menu.sh" &&
-        sh -n "$STAGE/validator.sh" || return 1
+        sh -n "$STAGE/validator.sh" && sh -n "$STAGE/deployer.sh" || return 1
     grep -Fq '# KeenUtils Flowseal converter bootstrap.' "$STAGE/flowseal_converter" ||
         { error 'Неверный формат загрузчика';return 1; }
     grep -Fq '# Independent Flowseal -> nfqws2 manager;' "$STAGE/menu.sh" ||
