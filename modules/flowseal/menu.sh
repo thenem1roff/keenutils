@@ -23,7 +23,18 @@ trap 'exit 143' TERM
 message() { printf '%s\n' "$*"; }
 error() { printf 'Ошибка: %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
-pause_menu() { :; }
+# Clear only interactive terminal screens; keep redirected logs readable.
+clear_menu_screen() {
+    if [ -t 1 ]; then
+        printf '\033[2J\033[H'
+    fi
+}
+pause_menu() {
+    message ''
+    printf 'Нажмите Enter, чтобы вернуться к выбору пункта... '
+    IFS= read -r pause_answer || return 1
+    return 0
+}
 ask_yes() {
     while :; do
         printf '%s [Y/n]: ' "$1"
@@ -354,37 +365,78 @@ add_strategy() {
     message 'Конвертация не применена к роутеру.'
     cat "$destination/REPORT.md"
     cleanup
+    pause_menu || :
+    clear_menu_screen
 }
 
+strategy_menu_header() {
+    message '======== KeenUtils | Моя стратегия ========'
+    message "$label"
+    if [ "$active" = yes ]; then
+        message 'Статус: совпадает с рабочим конфигом'
+    else
+        message 'Статус: сохранена'
+    fi
+    message '----------------------------------------'
+    message ' 1. Информация и предупреждения'
+    message ' 2. Просмотреть nfqws2.conf'
+    message ' 3. Проверить синтаксис и ресурсы (без применения)'
+    message ' 4. Удалить стратегию'
+    message ' 0. Назад'
+}
+strategy_show_page() {
+    page=$1
+    clear_menu_screen
+    strategy_menu_header
+    message '----------------------------------------'
+    case "$page" in
+        1)
+            message 'Информация и предупреждения'
+            message ''
+            cat "$selected_dir/REPORT.md" ;;
+        2)
+            message 'Конфигурация nfqws2.conf'
+            message ''
+            cat "$selected_dir/nfqws2.conf" ;;
+        3)
+            message 'Проверка синтаксиса и ресурсов'
+            message ''
+            sh "$RUNTIME/validator.sh" "$selected_dir" || : ;;
+    esac
+    pause_menu
+}
 show_strategy() {
     selected_dir=$1
     while :; do
         if [ ! -f "$selected_dir/info.json" ] || [ -L "$selected_dir" ]; then
-            error 'Стратегия отсутствует.';return
+            error 'Стратегия отсутствует.'
+            return 1
         fi
-        label=$(jq -r '.name + " — Flowseal " + .version' "$selected_dir/info.json")
-        message ""
-        message "$label"
+        label=$(jq -r '.name + " — Flowseal " + .version' "$selected_dir/info.json") || {
+            error 'Не удалось прочитать сведения о стратегии.'
+            return 1
+        }
         if [ -f "$selected_dir/nfqws2.conf" ] && [ -r "$Nfqws2_CONF" ] &&
             cmp -s "$selected_dir/nfqws2.conf" "$Nfqws2_CONF"; then
-            message 'Статус: совпадает с рабочим конфигом'
             active=yes
-        else active=no;message 'Статус: сохранена';fi
-        message ' 1. Информация и предупреждения'
-        message ' 2. Просмотреть nfqws2.conf'
-        message ' 3. Проверить синтаксис и ресурсы (без применения)'
-        message ' 4. Удалить стратегию'
-        message ' 0. Назад'
+        else
+            active=no
+        fi
+        clear_menu_screen
+        strategy_menu_header
         printf 'Выбор: '
-        IFS= read -r choice || return
+        IFS= read -r choice || return 0
         case "$choice" in
-            ''|0|00)return;;
-            1) cat "$selected_dir/REPORT.md" ;;
-            2) cat "$selected_dir/nfqws2.conf" ;;
-            3) sh "$RUNTIME/validator.sh" "$selected_dir" || : ;;
+            0|00) return 0 ;;
+            '') continue ;;
+            1|2|3)
+                # Menu always appears ABOVE the requested content.
+                # On Enter, clear the page and redraw the menu.
+                strategy_show_page "$choice" || return 0 ;;
             4)
                 if [ "$active" = yes ]; then
                     error 'Удаление действующей конфигурации запрещено.'
+                    pause_menu || return 0
                     continue
                 fi
                 if ask_yes "Удалить $label и прежние редакции?"; then
@@ -394,9 +446,10 @@ show_strategy() {
                         [ -d "$older" ] && [ ! -L "$older" ] && rm -rf "$older"
                     done
                     message 'Стратегия удалена.'
-                    return
+                    return 0
                 fi ;;
-            *) message 'Неизвестный пункт.' ;;
+            *) message 'Неизвестный пункт.'
+               pause_menu || return 0 ;;
         esac
     done
 }
@@ -423,7 +476,12 @@ saved_menu() {
         case "$choice" in *[!0-9]*)message 'Неверный номер.';rm -f "$list";continue;;esac
         target=$(awk -F '\t' -v id="$choice" '$1==id {print $2;exit}' "$list")
         rm -f "$list"
-        [ -n "$target" ] && show_strategy "$target" || message 'Неверный номер.'
+        if [ -n "$target" ]; then
+            show_strategy "$target" || :
+            clear_menu_screen
+        else
+            message 'Неверный номер.'
+        fi
     done
 }
 main() {
