@@ -1,7 +1,7 @@
 #!/bin/sh
 # End-to-end install/rollback on a completely isolated fake Entware root.
 # No writes to real /opt, no network, no Python.
-set -eux
+set -eu
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 export KEENUTILS_FLOWSEAL_TEST_ONLY=1
@@ -144,5 +144,5 @@ fi
 test "$(cat "$base/blobs/flowseal-1.10.4-alt13-fake.bin")" = DIFFERENT
 test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
 sh "$deployer" history > "$work/history.log"
-grep -Fq 'Резервные копии' "$work/history.log"
+grep -Fq 'Сохранённые резервные копии' "$work/history.log"
 printf 'Transactional deployment, safe switching, rollback and failure recovery: OK\n'
