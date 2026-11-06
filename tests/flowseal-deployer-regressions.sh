@@ -1,7 +1,7 @@
 #!/bin/sh
 # End-to-end install/rollback on a completely isolated fake Entware root.
 # No writes to real /opt, no network, no Python.
-set -eu
+set -eux
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 export KEENUTILS_FLOWSEAL_TEST_ONLY=1
