@@ -92,8 +92,8 @@ check_archive_size() {
 }
 extract_safe() {
     archive=$1; source=$2; members=$3
-    unzip -Z1 "$archive" > "$members" || {error 'Невозможно получить список файлов ZIP.';return 1;}
-    check_archive_size "$archive" || {error 'Архив слишком велик или имеет неправильную структуру.';return 1;}
+    unzip -Z1 "$archive" > "$members" || { error 'Невозможно получить список файлов ZIP.';return 1; }
+    check_archive_size "$archive" || { error 'Архив слишком велик или имеет неправильную структуру.';return 1; }
     count=0
     while IFS= read -r item; do
         case "$item" in
@@ -122,7 +122,7 @@ extract_safe() {
         }
         case "$rel" in general*.bat) count=$((count+1)) ;; esac
     done < "$members"
-    [ "$count" -gt 0 ] || {error 'В выпуске нет стратегий general*.bat.';return 1;}
+    [ "$count" -gt 0 ] || { error 'В выпуске нет стратегий general*.bat.';return 1; }
 }
 identity() {
     ident=$(printf '%s' "$1" | sed 's/\.bat$//;s/^general (//;s/)$//;s/^general$/GENERAL/' |
@@ -201,7 +201,7 @@ convert_profile() {
     mkdir -p "$output" || return 1
     wan_interface
     hex=$(od -An -tx1 -v "$RUNTIME/hostfakesplit_alt1.lua" | tr -d ' \n') || return 1
-    [ -n "$hex" ] || {error 'Отсутствует код Lua-совместимости.';return 1;}
+    [ -n "$hex" ] || { error 'Отсутствует код Lua-совместимости.';return 1; }
     FLOWSEAL_OUTPUT="$output" FLOWSEAL_GAMES="$games" FLOWSEAL_INTERFACE="$WAN" \
         FLOWSEAL_ALT_LUA_HEX="$hex" \
         awk -f "$RUNTIME/converter.awk" "$source/$profile" || return 1
@@ -254,7 +254,7 @@ add_strategy() {
     dependencies || return 1
     mkdir -p "$TEMP" "$STRATEGIES" "$HISTORY" || return 1
     CLEAN_TEMP=$(mktemp -d "$TEMP/.import.XXXXXX") || return 1
-    read_release "$CLEAN_TEMP/release.json" || {cleanup;return 1;}
+    read_release "$CLEAN_TEMP/release.json" || { cleanup;return 1; }
     message "Загрузка Flowseal $FLOW_VERSION..."
     fetch "$FLOW_URL" "$CLEAN_TEMP/release.zip" || {
         error 'Не удалось загрузить выпуск Flowseal.';cleanup;return 1;
@@ -267,13 +267,13 @@ add_strategy() {
     }
     mkdir -p "$CLEAN_TEMP/source"
     extract_safe "$CLEAN_TEMP/release.zip" "$CLEAN_TEMP/source" "$CLEAN_TEMP/members" ||
-        {cleanup;return 1;}
-    pick_profile "$CLEAN_TEMP/source" "$CLEAN_TEMP/profiles.tsv" || {cleanup;return 0;}
+        { cleanup;return 1; }
+    pick_profile "$CLEAN_TEMP/source" "$CLEAN_TEMP/profiles.tsv" || { cleanup;return 0; }
     LABEL=$(friendly "$SELECTED")
-    ask_yes "Конвертировать $LABEL (Flowseal $FLOW_VERSION)?" || {cleanup;return 0;}
+    ask_yes "Конвертировать $LABEL (Flowseal $FLOW_VERSION)?" || { cleanup;return 0; }
     GAMES=no
     if ask_yes 'Добавить игровые TCP/UDP-порты?'; then GAMES=yes; fi
-    identity "$SELECTED" || {error 'Не удалось сформировать имя стратегии.';cleanup;return 1;}
+    identity "$SELECTED" || { error 'Не удалось сформировать имя стратегии.';cleanup;return 1; }
     destination="$STRATEGIES/$STRATEGY_ID"
     if [ -L "$destination" ]; then
         error 'Путь стратегии является символической ссылкой.';cleanup;return 1
@@ -297,13 +297,13 @@ add_strategy() {
     fi
     if [ -e "$destination" ]; then
         old="$HISTORY/$STRATEGY_ID-$(date -u +%Y%m%d-%H%M%S)-$$"
-        mv "$destination" "$old" || {cleanup;return 1;}
+        mv "$destination" "$old" || { cleanup;return 1; }
         if ! mv "$output" "$destination"; then
             mv "$old" "$destination" || error 'Не удалось восстановить сохранённую стратегию!'
             cleanup;return 1
         fi
     else
-        mv "$output" "$destination" || {cleanup;return 1;}
+        mv "$output" "$destination" || { cleanup;return 1; }
     fi
     message ""
     message "Сохранено: $LABEL — Flowseal $FLOW_VERSION"
@@ -373,7 +373,7 @@ saved_menu() {
         [ "$count" -gt 0 ] || message '  Пока нет сохранённых стратегий.'
         message ' 0. Назад'
         printf 'Выберите стратегию: '
-        IFS= read -r choice || {rm -f "$list";return;}
+        IFS= read -r choice || { rm -f "$list";return; }
         case "$choice" in ''|0|00)rm -f "$list";return;;esac
         case "$choice" in *[!0-9]*)message 'Неверный номер.';rm -f "$list";continue;;esac
         target=$(awk -F '\t' -v id="$choice" '$1==id {print $2;exit}' "$list")
