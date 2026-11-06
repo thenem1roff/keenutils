@@ -32,7 +32,7 @@ grep -Fq 'Нажмите Enter, чтобы вернуться к выбору п
 
 # Enter resumes the menu. Test all 4 read-only pages and navigate back with 0.
 printf '1\n\n2\n\n3\n\n4\n\n0\n' | show_strategy "$strategy" > "$work/pages.log"
-test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/pages.log")" -eq 7
+test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/pages.log")" -eq 9
 test "$(grep -Fc 'Нажмите Enter, чтобы вернуться к выбору пункта' "$work/pages.log")" -eq 4
 grep -Fq 'REPORT-DETAIL' "$work/pages.log"
 grep -Fq 'Конфигурация nfqws2.conf' "$work/pages.log"
