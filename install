@@ -1541,7 +1541,8 @@ launch_flowseal_converter() {
         err 'Конвертер: символическая ссылка вместо загрузчика. Запуск запрещён.'
         return 1
     fi
-    if [ ! -f "$fc_target" ]; then
+    # During development refresh only the small bootstrap, not the full module.
+    if [ ! -f "$fc_target" ] || [ "$fc_ref" != main ]; then
         ensure_mktemp || return 1
         fc_temp=$(mktemp /opt/bin/.keenutils-flowseal.XXXXXX) || return 1
         fc_url="https://raw.githubusercontent.com/thenem1roff/keenutils/$fc_ref/flowseal_converter"
@@ -1552,12 +1553,15 @@ launch_flowseal_converter() {
             err 'Не удалось получить проверенный модуль конвертера.'
             return 1
         fi
-        chmod 700 "$fc_temp" && mv "$fc_temp" "$fc_target" || {
+        if [ "$fc_ref" != main ] && [ -f "$fc_target" ] &&
+            have cmp && cmp -s "$fc_temp" "$fc_target"; then
+            rm -f "$fc_temp"
+        elif ! chmod 700 "$fc_temp" || ! mv "$fc_temp" "$fc_target"; then
             rm -f "$fc_temp"
             err 'Не удалось сохранить модуль конвертера.'
             return 1
-        }
-        say 'Модуль конвертера установлен локально.'
+        fi
+        say 'Загрузчик конвертера готов.'
     fi
     sh "$fc_target"
 }
