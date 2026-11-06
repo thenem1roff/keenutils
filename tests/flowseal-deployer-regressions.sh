@@ -145,4 +145,18 @@ test "$(cat "$base/blobs/flowseal-1.10.4-alt13-fake.bin")" = DIFFERENT
 test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
 sh "$deployer" history > "$work/history.log"
 grep -Fq 'Сохранённые резервные копии' "$work/history.log"
-printf 'Transactional deployment, safe switching, rollback and failure recovery: OK\n'
+# An external manual modification must prevent destructive manual rollback.
+cp "$base/nfqws2.conf" "$work/last-known-good.conf"
+printf '\n# changed outside KeenUtils\n' >> "$base/nfqws2.conf"
+if sh "$deployer" undo > "$work/manual-change.log" 2>&1; then
+    echo 'Overwrote externally edited configuration' >&2;exit 1
+fi
+grep -Fq 'Автоматический откат отменён' "$work/manual-change.log"
+grep -Fq '# changed outside KeenUtils' "$base/nfqws2.conf"
+cp "$work/last-known-good.conf" "$base/nfqws2.conf"
+# Multi-level rollback: ALT13 -> ALT12 -> pre-existing nfqws2 (originally stopped).
+sh "$deployer" undo > "$work/undo-original.log"
+test "$original" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
+test ! -e "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
+test ! -e "$work/opt/running"
+printf 'Transactional deployment, safe switching, multi-level rollback and failure recovery: OK\n'
