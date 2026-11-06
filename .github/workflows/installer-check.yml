@@ -10,6 +10,7 @@ on:
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
       - tests/flowseal-ui-regressions.sh
+      - tests/flowseal-deployer-regressions.sh
       - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
@@ -38,6 +39,7 @@ on:
       - tests/flowseal-converter-regressions.sh
       - tests/flowseal-import-regressions.sh
       - tests/flowseal-ui-regressions.sh
+      - tests/flowseal-deployer-regressions.sh
       - tests/flowseal-bootstrap-regressions.sh
       - tests/test_flowseal_equivalence.py
       - 'tests/reference/**'
@@ -55,9 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: POSIX shell syntax
-        run: sh -n install && sh -n flowseal_converter && sh -n modules/flowseal/menu.sh && sh -n modules/flowseal/validator.sh && sh -n torr_watchdog && sh -n torrserver
+        run: sh -n install && sh -n flowseal_converter && sh -n modules/flowseal/menu.sh && sh -n modules/flowseal/validator.sh && sh -n modules/flowseal/deployer.sh && sh -n torr_watchdog && sh -n torrserver
       - name: ShellCheck errors
-        run: shellcheck --severity=error --shell=sh install flowseal_converter modules/flowseal/menu.sh modules/flowseal/validator.sh torr_watchdog torrserver
+        run: shellcheck --severity=error --shell=sh install flowseal_converter modules/flowseal/menu.sh modules/flowseal/validator.sh modules/flowseal/deployer.sh torr_watchdog torrserver
       - name: Menu smoke test
         run: |
           sudo mkdir -p /opt/bin /opt/etc
@@ -155,6 +157,8 @@ jobs:
         run: sh tests/flowseal-converter-regressions.sh
       - name: Offline Flowseal ZIP release import and saved-strategy integration
         run: sh tests/flowseal-import-regressions.sh
+      - name: Flowseal transactional deploy and rollback in isolated Entware
+        run: sh tests/flowseal-deployer-regressions.sh
       - name: Flowseal saved strategy menu Enter and details placement
         run: sh tests/flowseal-ui-regressions.sh
       - name: Flowseal standalone child and return to main menu
