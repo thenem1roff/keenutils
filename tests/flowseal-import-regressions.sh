@@ -8,6 +8,8 @@ export KEENUTILS_FLOWSEAL_HOME="$work/home"
 mkdir -p "$KEENUTILS_FLOWSEAL_HOME" "$work/upstream/lists" "$work/upstream/bin"
 . ./modules/flowseal/menu.sh
 RUNTIME="$PWD/modules/flowseal"
+# Real Keenetic BusyBox od does not support -A. Reject *any* runtime use.
+od() { printf 'FAIL: shell converter tried to execute od\n' >&2; return 87; }
 
 cp "tests/fixtures/flowseal/general (ALT13).bat" \
    "$work/upstream/general (ALT13).bat"
