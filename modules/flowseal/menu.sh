@@ -252,13 +252,13 @@ save_report() {
     jq -n --arg source Flowseal --arg name "$LABEL" \
         --arg version "$FLOW_VERSION" --arg profile "$SELECTED" \
         --arg game_ports "$GAMES" --arg release_url "$FLOW_URL" \
-        --arg archive_sha256 "$ZIP_SHA" --arg profile_sha256 "$PROFILE_SHA" \
+        --arg release_tree_sha "$FLOW_TREE_SHA" --arg profile_sha256 "$PROFILE_SHA" \
         --arg converted_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
         --argjson profiles_read "$read_count" --argjson profiles_written "$write_count" \
         --argjson warnings "$warns" \
         '{source:$source,name:$name,version:$version,profile:$profile,
         game_ports:($game_ports=="yes"),release_url:$release_url,
-        archive_sha256:$archive_sha256,profile_sha256:$profile_sha256,
+        release_tree_sha:$release_tree_sha,profile_sha256:$profile_sha256,
         converted_at:$converted_at,profiles_read:$profiles_read,
         profiles_written:$profiles_written,warnings:$warnings,state:"saved_only"}' \
         > "$output/info.json" || return 1
@@ -269,20 +269,12 @@ add_strategy() {
     mkdir -p "$TEMP" "$STRATEGIES" "$HISTORY" || return 1
     CLEAN_TEMP=$(mktemp -d "$TEMP/.import.XXXXXX") || return 1
     read_release "$CLEAN_TEMP/release.json" || { cleanup;return 1; }
-    message "Загрузка Flowseal $FLOW_VERSION..."
-    fetch "$FLOW_URL" "$CLEAN_TEMP/release.zip" || {
-        error 'Не удалось загрузить выпуск Flowseal.';cleanup;return 1;
+    message "Получение стратегий Flowseal $FLOW_VERSION..."
+    read_tree "$CLEAN_TEMP/tree.json" || { cleanup;return 1; }
+    list_profiles "$CLEAN_TEMP/tree.json" "$CLEAN_TEMP/profiles.txt" || {
+        cleanup;return 1
     }
-    [ "$(wc -c < "$CLEAN_TEMP/release.zip")" -le 20000000 ] || {
-        error 'ZIP превышает предельный размер.';cleanup;return 1;
-    }
-    ZIP_SHA=$(sha256sum "$CLEAN_TEMP/release.zip" | awk '{print $1}') || {
-        cleanup;return 1;
-    }
-    mkdir -p "$CLEAN_TEMP/source"
-    extract_safe "$CLEAN_TEMP/release.zip" "$CLEAN_TEMP/source" "$CLEAN_TEMP/members" ||
-        { cleanup;return 1; }
-    pick_profile "$CLEAN_TEMP/source" "$CLEAN_TEMP/profiles.tsv" || { cleanup;return 0; }
+    pick_profile "$CLEAN_TEMP/profiles.txt" || { cleanup;return 0; }
     LABEL=$(friendly "$SELECTED")
     ask_yes "Конвертировать $LABEL (Flowseal $FLOW_VERSION)?" || { cleanup;return 0; }
     GAMES=no
@@ -301,10 +293,17 @@ add_strategy() {
         error 'Конфигурация совпадает с рабочей; пересоздание запрещено.'
         cleanup;return 1
     fi
+    mkdir -p "$CLEAN_TEMP/source"
+    message "Загрузка выбранного профиля $LABEL (без архива)..."
+    get_profile "$SELECTED" "$CLEAN_TEMP/source/$SELECTED" || {
+        cleanup;return 1
+    }
     PROFILE_SHA=$(sha256sum "$CLEAN_TEMP/source/$SELECTED" | awk '{print $1}')
     output="$CLEAN_TEMP/converted"
     message 'Конвертация...'
     if ! convert_profile "$CLEAN_TEMP/source" "$SELECTED" "$output" "$GAMES" ||
+        ! download_resources "$CLEAN_TEMP/tree.json" "$CLEAN_TEMP/source" "$output" ||
+        ! copy_resources "$CLEAN_TEMP/source" "$output" ||
         ! save_report "$output"; then
         error 'Конвертация не завершена. Рабочая конфигурация не изменена.'
         cleanup;return 1
@@ -327,6 +326,7 @@ add_strategy() {
     cat "$destination/REPORT.md"
     cleanup
 }
+
 show_strategy() {
     selected_dir=$1
     while :; do
