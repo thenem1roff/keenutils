@@ -124,7 +124,10 @@ function port_list(t,i,j,temp,a,b,result,slots){
 }
 function filename(raw,s,name){
     if(raw ~ /(^|[\\\/])\.\.([\\\/]|$)/)fail("Unsafe file reference: " raw)
-    s=raw;gsub(/\\/,"/",s);sub(/^.*\//,"",s);name=s
+    s=raw;gsub(/\\/,"/",s)
+    sub(/^%[Ll][Ii][Ss][Tt][Ss]%/,"",s)
+    sub(/^%[Bb][Ii][Nn]%/,"",s)
+    sub(/^.*\//,"",s);name=s
     if(name==""||name !~ /^[A-Za-z0-9._-]+$/)fail("Invalid file name: " raw)
     return name
 }
