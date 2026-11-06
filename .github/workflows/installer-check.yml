@@ -6,10 +6,10 @@ on:
       - flowseal_converter
       - flowseal.version
       - 'modules/flowseal/**'
-      - tests/test_flowseal_manager.py
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/test_flowseal_equivalence.py
+      - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
       - torr_watchdog
       - torrserver
@@ -31,10 +31,10 @@ on:
       - flowseal_converter
       - flowseal.version
       - 'modules/flowseal/**'
-      - tests/test_flowseal_manager.py
       - tests/flowseal-launcher-regressions.sh
       - tests/flowseal-converter-regressions.sh
       - tests/test_flowseal_equivalence.py
+      - 'tests/reference/**'
       - 'tests/fixtures/flowseal/**'
       - torr_watchdog
       - torrserver
@@ -49,9 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: POSIX shell syntax
-        run: sh -n install && sh -n flowseal_converter && sh -n torr_watchdog && sh -n torrserver
+        run: sh -n install && sh -n flowseal_converter && sh -n modules/flowseal/menu.sh && sh -n torr_watchdog && sh -n torrserver
       - name: ShellCheck errors
-        run: shellcheck --severity=error --shell=sh install flowseal_converter torr_watchdog torrserver
+        run: shellcheck --severity=error --shell=sh install flowseal_converter modules/flowseal/menu.sh torr_watchdog torrserver
       - name: Menu smoke test
         run: |
           sudo mkdir -p /opt/bin /opt/etc
@@ -143,8 +143,6 @@ jobs:
           sudo sh ./torr_watchdog | grep -q 'уже установлен'
           test "$repaired" = "$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
 
-      - name: Flowseal conversion and safe ZIP import (offline)
-        run: python3 -m unittest discover -s tests -p test_flowseal_manager.py -v
       - name: Compare Shell AWK conversion with Python reference on Flowseal fixtures (CI only)
         run: python3 -m unittest discover -s tests -p test_flowseal_equivalence.py -v
       - name: Shell AWK Flowseal conversion and validation (no Python)
