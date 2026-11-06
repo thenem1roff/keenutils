@@ -1,6 +1,6 @@
 #!/bin/sh
 # Root-only CI mocks; no router packages or settings are modified by tests.
-set -eux
+set -eu
 mkdir -p /opt/bin /opt/etc /opt/sbin
 cp ./install /opt/bin/keenutils
 chmod 755 /opt/bin/keenutils
@@ -90,7 +90,8 @@ test "$(wc -l </tmp/keenutils-header-network-count)" = 4
 # nfqws-web and AWG Manager are still there; only nfqws2 is absent from final header.
 awk '
   /Установлены:/ {block=1; line=""; next}
-  block && /----------------------------------------/ {
+  # The installed-app block ends at the old divider or new Installation heading.
+  block && (/----------------------------------------/ || / Установка /) {
     if (line != "") last=line
     block=0
     next
