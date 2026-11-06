@@ -406,4 +406,7 @@ main() {
         esac
     done
 }
-main
+# Test harness sources functions without launching the interactive menu.
+if [ "${KEENUTILS_FLOWSEAL_TEST_ONLY:-0}" != 1 ]; then
+    main
+fi
