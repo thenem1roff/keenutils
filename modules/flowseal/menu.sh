@@ -329,7 +329,8 @@ show_strategy() {
         else active=no;message 'Статус: сохранена';fi
         message ' 1. Информация и предупреждения'
         message ' 2. Просмотреть nfqws2.conf'
-        message ' 3. Удалить стратегию'
+        message ' 3. Проверить синтаксис и ресурсы (без применения)'
+        message ' 4. Удалить стратегию'
         message ' 0. Назад'
         printf 'Выбор: '
         IFS= read -r choice || return
@@ -337,7 +338,8 @@ show_strategy() {
             ''|0|00)return;;
             1) cat "$selected_dir/REPORT.md" ;;
             2) cat "$selected_dir/nfqws2.conf" ;;
-            3)
+            3) sh "$RUNTIME/validator.sh" "$selected_dir" || : ;;
+            4)
                 if [ "$active" = yes ]; then
                     error 'Удаление действующей конфигурации запрещено.'
                     continue
