@@ -5,8 +5,6 @@
 Установка в shell Entware от root через SSH/Telnet:
 ```sh
 opkg update && opkg install ca-certificates wget-ssl
-```
-```sh
 wget -O /tmp/keenutils-install.sh https://raw.githubusercontent.com/thenem1roff/keenutils/main/install && sh /tmp/keenutils-install.sh
 ```
 
