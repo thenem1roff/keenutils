@@ -1,8 +1,9 @@
 """Python is used ONLY in GitHub CI as a reference implementation, never on Keenetic.
 
 Compare Flowseal strategy semantics (arguments/order) of the Shell/AWK port
-against the upstream Sxlenium MIT converter. Stock LIST path substitutions
-are intentionally excluded from equality comparisons.
+against the upstream Sxlenium MIT converter. Stock LIST paths and their duplicate-merge counts are intentionally
+excluded from parity comparisons; dedicated Shell/AWK tests verify that each
+list file occurs only once per nfqws2 profile.
 """
 import os
 import re
@@ -29,12 +30,11 @@ def normalized_arguments(text: str) -> list[str]:
     lines = assignment(text, "NFQWS_ARGS_CUSTOM") + assignment(text, "NFQWS_ARGS")
     cleaned = []
     for line in lines:
-        # Stock nfqws2 LIST mappings are deliberately not the same as Flowseal.
-        line = re.sub(
-            r"(--(?:hostlist|hostlist-exclude|ipset|ipset-exclude)=)/opt/etc/nfqws2/lists/[^ ]+",
-            r"\1<LIST>",
-            line,
-        )
+        # Upstream Flowseal may use two source files that resolve to one
+        # nfqws2 stock list. New converter output correctly merges those
+        # references, so compare non-list strategy semantics here.
+        if re.match(r"^--(?:hostlist|hostlist-exclude|ipset|ipset-exclude)=", line):
+            continue
         cleaned.append(line)
     return cleaned
 
