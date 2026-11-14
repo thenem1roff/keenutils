@@ -155,6 +155,38 @@ prepare_candidate() {
 # lists mapped to the same nfqws2 path. zapret2 >= v1.0.7 rejects a second
 # registration of an identical file/type inside the same --new profile.
 # Repair only the STAGED candidate; never rewrite saved or live configs here.
+# Old saved drafts use long names (flowseal-VERSION-ALT-list-google.list).
+# Update only the staged candidate using the original manifest, not the
+# saved source or the live config. The source file remains available under
+# its original name and is mapped by resource_for().
+normalize_extra_list_names() {
+    check_plain_file "$SAVED/lists.manifest" || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r origin legacy; do
+        printf '%s\n' "$origin" | grep -Eq '^[A-Za-z0-9._-]+[.]txt$' || return 1
+        printf '%s\n' "$legacy" | grep -Eq '^[A-Za-z0-9._-]+[.]list$' || return 1
+        case "$legacy" in
+            "${SAVED##*/}"-*) : ;;
+            *) continue ;;
+        esac
+        short="${origin%.txt}.list"
+        [ "$legacy" = "$short" ] && continue
+        old="/opt/etc/nfqws2/lists/$legacy"
+        replacement="/opt/etc/nfqws2/lists/$short"
+        tmp="$STAGE/.list-rename.$$"
+        awk -v old="$old" -v replacement="$replacement" '
+            {
+                text=$0
+                while ((pos=index(text,old))>0)
+                    text=substr(text,1,pos-1) replacement substr(text,pos+length(old))
+                print text
+            }
+        ' "$STAGE/nfqws2.conf" > "$tmp" || return 1
+        mv "$tmp" "$STAGE/nfqws2.conf" || return 1
+    done < "$SAVED/lists.manifest"
+    sh -n "$STAGE/nfqws2.conf"
+}
+
 normalize_list_refs() {
     normalized="$STAGE/nfqws2.normalized"
     if ! awk '
@@ -432,6 +464,7 @@ validate_and_prepare() {
     ensure_saved || { err 'Папка стратегии за пределами хранилища или повреждена.';return 1; }
     begin_stage || return 1
     prepare_candidate || return 1
+    normalize_extra_list_names || return 1
     normalize_list_refs || return 1
     extract_references
     prepare_missing_lua || return 1
