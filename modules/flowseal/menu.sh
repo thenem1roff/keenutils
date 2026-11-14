@@ -369,6 +369,144 @@ add_strategy() {
     clear_menu_screen
 }
 
+# Work from the exact Flowseal release that originally produced the strategy.
+strategy_upstream() {
+    STRATEGY_VERSION=$(jq -er '.version | strings' "$selected_dir/info.json") || return 1
+    printf '%s\n' "$STRATEGY_VERSION" |
+        grep -Eq '^[0-9]+(\.[0-9]+){1,3}$' || return 1
+    STRATEGY_RAW="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/$STRATEGY_VERSION"
+    STRATEGY_TREE="https://api.github.com/repos/Flowseal/zapret-discord-youtube/git/trees/$STRATEGY_VERSION?recursive=1"
+}
+load_strategy_tree() {
+    [ -s "$CLEAN_TEMP/tree.json" ] && return 0
+    fetch "$STRATEGY_TREE" "$CLEAN_TEMP/tree.json" || {
+        error "Не удалось получить список файлов Flowseal $STRATEGY_VERSION."; return 1;
+    }
+    jq -e '.truncated == false and (.tree | type == "array")' "$CLEAN_TEMP/tree.json" >/dev/null ||
+        { error 'Ответ GitHub содержит неполный список файлов.'; return 1; }
+}
+fetch_strategy_file() {
+    fs_kind=$1; fs_name=$2; fs_dest=$3
+    case "$fs_kind" in lists|bin) : ;; *) return 1 ;; esac
+    printf '%s\n' "$fs_name" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+    case "$fs_name" in .|..|*..*) return 1 ;; esac
+    load_strategy_tree || return 1
+    tree_has_file "$CLEAN_TEMP/tree.json" "$fs_kind/$fs_name" || {
+        message "В выпуске Flowseal нет файла $fs_kind/$fs_name."
+        return 1
+    }
+    fetch "$STRATEGY_RAW/$fs_kind/$fs_name" "$fs_dest" &&
+        [ -s "$fs_dest" ] &&
+        [ "$(wc -c < "$fs_dest")" -le 8388608 ] || {
+            error "Не удалось скачать $fs_kind/$fs_name."; return 1;
+        }
+}
+# Recover missing files in SAVED strategy. Existing saved and system files
+# are never overwritten by this command.
+recover_saved_resources() {
+    strategy_upstream || { error 'Не удалось определить выпуск Flowseal.'; return 1; }
+    mkdir -p "$TEMP" || return 1
+    CLEAN_TEMP=$(mktemp -d "$TEMP/.resources.XXXXXX") || return 1
+    count=0; failcount=0
+    for kind in lists blobs; do
+        manifest="$selected_dir/$kind.manifest"
+        [ -s "$manifest" ] || continue
+        tab=$(printf '\t')
+        while IFS="$tab" read -r name dest ignored; do
+            [ -n "$name" ] || continue
+            printf '%s\n' "$name" | grep -Eq '^[A-Za-z0-9._-]+$' || { failcount=$((failcount+1));continue; }
+            printf '%s\n' "$dest" | grep -Eq '^[A-Za-z0-9._-]+$' || { failcount=$((failcount+1));continue; }
+            case "$name:$dest" in *..*)failcount=$((failcount+1));continue;;esac
+            if [ -L "$selected_dir/$kind/$dest" ]; then
+                error "Небезопасная ссылка: $kind/$dest"
+                failcount=$((failcount+1));continue
+            fi
+            [ ! -f "$selected_dir/$kind/$dest" ] || continue
+            mkdir -p "$selected_dir/$kind" || return 1
+            [ ! -L "$selected_dir/$kind" ] || return 1
+            origin=$kind
+            [ "$kind" = blobs ] && origin=bin
+            temporary="$CLEAN_TEMP/$dest"
+            if fetch_strategy_file "$origin" "$name" "$temporary"; then
+                # Do not replace a file that appeared while downloading.
+                [ ! -e "$selected_dir/$kind/$dest" ] || continue
+                cp "$temporary" "$selected_dir/$kind/$dest" || return 1
+                chmod 600 "$selected_dir/$kind/$dest" || return 1
+                message "Скачан: $kind/$dest"
+                count=$((count+1))
+            else
+                failcount=$((failcount+1))
+            fi
+        done < "$manifest"
+    done
+    message "Восстановлено файлов: $count. Недоступно: $failcount."
+    cleanup
+    [ "$failcount" -eq 0 ]
+}
+# Per-file user choice; default Enter keeps existing nfqws2 lists unchanged.
+list_choice() {
+    lc_target=$1; lc_source=$2; lc_filename=$3
+    LIST_CHOICE=''
+    if [ -L "$lc_target" ]; then
+        error "Символическая ссылка вместо списка: $lc_target"; return 1
+    fi
+    if [ ! -f "$lc_target" ]; then
+        if ask_yes "Нет $lc_filename. Скачать из Flowseal и добавить?"; then
+            LIST_CHOICE=replace
+        fi
+        return 0
+    fi
+    message ""
+    message "Список $lc_filename (Flowseal: $lc_source)"
+    message ' 1. Заменить существующий'
+    message ' 2. Объединить с существующим (без повторов)'
+    message ' 0. Оставить без изменений'
+    while :; do
+        printf 'Выбор [0]: '
+        IFS= read -r lc_choice || return 1
+        case "$lc_choice" in
+            1) LIST_CHOICE=replace;return 0 ;;
+            2) LIST_CHOICE=merge;return 0 ;;
+            ''|0) LIST_CHOICE='';return 0 ;;
+            *) message 'Введите 1, 2 или 0.' ;;
+        esac
+    done
+}
+prepare_apply_list_plan() {
+    LIST_PLAN=''
+    strategy_upstream || { error 'Не удалось определить версию сохранённой стратегии.';return 1; }
+    mkdir -p "$TEMP" || return 1
+    CLEAN_TEMP=$(mktemp -d "$TEMP/.stock-plan.XXXXXX") || return 1
+    mkdir "$CLEAN_TEMP/lists" || return 1
+    : > "$CLEAN_TEMP/plan.tsv"
+    if ! ask_yes 'Проверить списки Flowseal и выбрать замену/объединение?'; then
+        return 0
+    fi
+    for mapping in \
+        'user.list:list-general.txt' \
+        'exclude.list:list-exclude.txt' \
+        'ipset.list:ipset-all.txt' \
+        'ipset_exclude.list:ipset-exclude.txt' \
+        'list-google.list:list-google.txt'; do
+        list_name=${mapping%%:*}
+        upstream_name=${mapping#*:}
+        if ! grep -Fq "/opt/etc/nfqws2/lists/$list_name" "$selected_dir/nfqws2.conf" &&
+            ! grep -Fq "/opt/etc/nfqws2/lists/${selected_dir##*/}-$list_name" "$selected_dir/nfqws2.conf"; then
+            continue
+        fi
+        system_name="/opt/etc/nfqws2/lists/$list_name"
+        list_choice "$system_name" "$upstream_name" "$list_name" || return 1
+        [ -n "$LIST_CHOICE" ] || continue
+        if ! fetch_strategy_file lists "$upstream_name" "$CLEAN_TEMP/lists/$list_name"; then
+            error "Применение отменено: отсутствует источник $upstream_name."
+            return 1
+        fi
+        printf '%s\t%s\n' "$LIST_CHOICE" "$list_name" >> "$CLEAN_TEMP/plan.tsv"
+    done
+    [ -s "$CLEAN_TEMP/plan.tsv" ] && LIST_PLAN=$CLEAN_TEMP
+    return 0
+}
+
 strategy_menu_header() {
     message '======== KeenUtils | Моя стратегия ========'
     message "$label"
@@ -384,6 +522,7 @@ strategy_menu_header() {
     message ' 4. Сравнить с текущей конфигурацией'
     message ' 5. Применить стратегию'
     message ' 6. Удалить стратегию'
+    message ' 7. Скачать недостающие файлы стратегии'
     message ' 0. Назад'
 }
 strategy_show_page() {
@@ -456,8 +595,25 @@ show_strategy() {
                 message 'ПРИМЕНЕНИЕ СТРАТЕГИИ — изменит рабочую конфигурацию nfqws2.'
                 message 'Автоматически создаётся резервная копия и выполняется откат при ошибке.'
                 if ask_yes 'Применить эту стратегию к nfqws2?'; then
-                    sh "$RUNTIME/deployer.sh" apply "$selected_dir" ||
-                        error 'Применение не завершено; проверьте отчёт и состояние службы.'
+                    if prepare_apply_list_plan; then
+                        sh "$RUNTIME/deployer.sh" apply "$selected_dir" "$LIST_PLAN" ||
+                            error 'Применение не завершено; проверьте отчёт и состояние службы.'
+                    else
+                        error 'Не удалось подготовить списки; рабочая конфигурация не изменена.'
+                    fi
+                    cleanup
+                else
+                    message 'Действие отменено.'
+                fi
+                pause_menu || return 0 ;;
+            7)
+                clear_menu_screen
+                strategy_menu_header
+                message '----------------------------------------'
+                message 'Скачиваются только отсутствующие BIN/LIST выбранной стратегии.'
+                message 'Рабочие файлы nfqws2 не перезаписываются.'
+                if ask_yes 'Скачать недостающие файлы из Flowseal?'; then
+                    recover_saved_resources || error 'Не все файлы удалось скачать.'
                 else
                     message 'Действие отменено.'
                 fi
