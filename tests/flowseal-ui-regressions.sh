@@ -51,10 +51,27 @@ awk '
 # The submenu must not interpret an empty Enter as the "Back" action.
 printf '\n0\n' | show_strategy "$strategy" > "$work/blank.log"
 test "$(grep -Fc 'KeenUtils | Моя стратегия' "$work/blank.log")" -eq 2
-# Applying requires explicit uppercase APPLY; arbitrary input must cancel.
-printf '5\nno\n\n0\n' | show_strategy "$strategy" > "$work/confirm.log"
-grep -Fq 'Для подтверждения введите APPLY' "$work/confirm.log"
-grep -Fq 'Действие отменено.' "$work/confirm.log"
+# Apply and manual undo must use the common [Y/n] prompt with Enter=Yes.
+# Replace the deployment helper with a harmless call recorder.
+mkdir -p "$work/mock-runtime"
+cat > "$work/mock-runtime/deployer.sh" <<'MOCK_DEPLOY'
+#!/bin/sh
+printf '%s\n' "$1" >> "$KEENUTILS_FLOWSEAL_HOME/action.log"
+MOCK_DEPLOY
+RUNTIME="$work/mock-runtime"
+printf '5\nn\n\n0\n' | show_strategy "$strategy" > "$work/confirm-no.log"
+grep -Fq 'Применить эту стратегию к nfqws2? [Y/n]:' "$work/confirm-no.log"
+grep -Fq 'Действие отменено.' "$work/confirm-no.log"
+test ! -e "$HOME_DIR/action.log"
+printf '5\n\n\n0\n' | show_strategy "$strategy" > "$work/confirm-yes.log"
+grep -Fq 'Применить эту стратегию к nfqws2? [Y/n]:' "$work/confirm-yes.log"
+grep -Fxq apply "$HOME_DIR/action.log"
+printf '3\nn\n\n0\n' | deployment_menu > "$work/undo-no.log"
+grep -Fq 'Восстановить предыдущую конфигурацию? [Y/n]:' "$work/undo-no.log"
+test "$(wc -l < "$HOME_DIR/action.log")" -eq 1
+printf '3\n\n\n0\n' | deployment_menu > "$work/undo-yes.log"
+grep -Fxq undo "$HOME_DIR/action.log"
+test "$(wc -l < "$HOME_DIR/action.log")" -eq 2
 # Active status is read from a deployed config checksum, not from template equality.
 Nfqws2_CONF="$work/live.conf"
 printf '# preserved ISP settings\n' > "$Nfqws2_CONF"
