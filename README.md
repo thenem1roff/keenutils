@@ -50,7 +50,7 @@ utils
 
 ## Сторонние проекты
 
-KeenUtils — независимый проект, не связанный с авторами перечисленных программ. Все права на сторонние программы принадлежат их правообладателям. Установка выполняется из официальных источников. Условия использования определяются лицензиями соответствующих проектов.
+KeenUtils — независимый проект, не являющийся официальным продуктом перечисленных авторов. Права на сторонние программы и условия их использования определяются соответствующими правообладателями и лицензиями.
 
 - [nfqws](https://github.com/nfqws/nfqws-keenetic)
 - [nfqws2](https://github.com/nfqws/nfqws2-keenetic)
@@ -61,7 +61,5 @@ KeenUtils — независимый проект, не связанный с а
 - [AWG Manager](https://github.com/hoaxisr/awg-manager)
 - [TorrServer](https://github.com/YouROK/TorrServer)
 - [Flowseal](https://github.com/Flowseal/zapret-discord-youtube)
-
-KeenUtils не является официальным установщиком перечисленных проектов. Ссылки ведут на их исходные репозитории; авторство и лицензии следует проверять в соответствующих проектах.
 
 Исходная реализация конвертации адаптирована из [Sxlenium/zapret-keenetic-converter](https://github.com/Sxlenium/zapret-keenetic-converter) по лицензии MIT; оригинальный текст лицензии сохранён в [modules/flowseal/LICENSE](modules/flowseal/LICENSE).
