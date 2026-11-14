@@ -315,6 +315,10 @@ rollback_files() {
         tab=$(printf '\t')
         while IFS="$tab" read -r ref key; do
             [ -n "$ref" ] || continue
+            # Stock Lua files belong to nfqws2-keenetic, not a Flowseal profile.
+            # Preserve a repaired missing library across strategy undo/rollback.
+            case "$ref" in /opt/etc/nfqws2/lua/zapret-lib.lua|/opt/etc/nfqws2/lua/zapret-antidpi.lua)
+                continue ;; esac
             path=$(real_file "$ref") || continue
             if [ ! -L "$path" ] && [ -f "$path" ] &&
                 check_plain_file "$backup/resources/$key" &&
