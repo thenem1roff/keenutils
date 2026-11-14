@@ -278,6 +278,8 @@ source_url_allowed() {
         nfqws_menu:https://cdn.jsdelivr.net/gh/rndnaame/nfqws-menu@*|\
         keenkit:https://raw.githubusercontent.com/spatiumstas/KeenKit/*|\
         keenkit:https://cdn.jsdelivr.net/gh/spatiumstas/KeenKit@*|\
+        flashkeen:https://raw.githubusercontent.com/miha75vu-bit/Flashkeen/*|\
+        flashkeen:https://cdn.jsdelivr.net/gh/miha75vu-bit/Flashkeen@*|\
         hydra:https://git.zerrolabs.org/Ground-Zerro/release/*|\
         awg:https://raw.githubusercontent.com/hoaxisr/awg-manager/*|\
         awg:https://cdn.jsdelivr.net/gh/hoaxisr/awg-manager@*|\
@@ -468,6 +470,65 @@ launch_nfqws_menu() {
         umask 022
         sh "$nm_target"
     )
+}
+
+# Flashkeen's upstream installer installs core tools but does not open its menu.
+# Keep its permissions and exit/exec isolated from the KeenUtils parent.
+install_flashkeen() {
+    fk_target=/opt/bin/flashkeen
+    if [ ! -e "$fk_target" ] && [ ! -L "$fk_target" ]; then
+        fk_result=0
+        (
+            umask 022
+            fetch_and_run flashkeen Flashkeen
+        ) || fk_result=$?
+        [ "$fk_result" -ne 2 ] || return 0
+        [ "$fk_result" -eq 0 ] || return "$fk_result"
+    fi
+    if [ ! -s "$fk_target" ] || [ ! -x "$fk_target" ] ||
+       ! sh -n "$fk_target"; then
+        err 'Flashkeen не найден или повреждён. Не запускаю и не перезаписываю.'
+        return 1
+    fi
+    say 'Запуск Flashkeen.'
+    (
+        umask 022
+        "$fk_target"
+    )
+}
+
+# Short names are shared namespace: remove only exact upstream wrappers/links.
+u_flashkeen_launcher() {
+    case "$1" in
+        /opt/bin/Flashkeen|/opt/bin/flash|/opt/bin/f|/opt/bin/F|/opt/bin/update) ;;
+        *) return 1 ;;
+    esac
+    if [ -L "$1" ]; then
+        fk_link=$(readlink "$1" 2>/dev/null) || return 1
+        case "$fk_link" in /opt/bin/flashkeen|flashkeen) return 0 ;; esac
+        return 1
+    fi
+    [ -f "$1" ] || return 1
+    fk_wrapper=$(cat "$1") || return 1
+    case "$fk_wrapper" in
+        '#!/bin/sh
+/opt/bin/flashkeen "$@"'|'#!/bin/sh
+/opt/bin/flashkeen "$@"
+exit $?'|'#!/bin/sh
+exec /opt/bin/flashkeen "$@"') return 0 ;;
+    esac
+    return 1
+}
+u_remove_flashkeen() {
+    # Do not invoke upstream uninstall.sh: it also removes core disk utilities
+    # and can remove KeenKit/KeenSnap. Keep those and backups independent.
+    for fk_launcher in /opt/bin/Flashkeen /opt/bin/flash /opt/bin/f /opt/bin/F /opt/bin/update; do
+        if u_flashkeen_launcher "$fk_launcher"; then
+            rm -f "$fk_launcher" || return 1
+        fi
+    done
+    rm -f /opt/bin/flashkeen || return 1
+    say 'Flashkeen удалён. Дисковые утилиты, KeenKit и резервные копии сохранены.'
 }
 
 install_keenkit() {
@@ -935,6 +996,7 @@ u_label() {
         nfqws-web) say 'nfqws-web' ;;
         nfqws-menu) say 'nfqws-menu' ;;
         keenkit) say 'KeenKit' ;;
+        flashkeen) say 'Flashkeen' ;;
         hydra) say 'HydraRoute Neo' ;;
         awg) say 'AWG Manager' ;;
         torrserver) say 'TorrServer' ;;
@@ -994,6 +1056,11 @@ u_paths() {
         keenkit)
             # Only the script and its official launcher are managed here.
             printf '%s\n' /opt/keenkit.sh /opt/bin/keenkit ;;
+        flashkeen)
+            printf '%s\n' /opt/bin/flashkeen
+            for fk_launcher in /opt/bin/Flashkeen /opt/bin/flash /opt/bin/f /opt/bin/F /opt/bin/update; do
+                if u_flashkeen_launcher "$fk_launcher"; then printf '%s\n' "$fk_launcher"; fi
+            done ;;
         hydra)
             printf '%s\n' /opt/etc/HydraRoute
             # Match even a broken /opt/bin/neo left by package postinst.
@@ -1017,6 +1084,7 @@ u_detect() {
         nfqws-web) pkg_installed nfqws-keenetic-web && U_INSTALLED=1 ;;
         nfqws-menu) [ -s /opt/nfqws-menu.sh ] && U_INSTALLED=1 ;;
         keenkit) [ -f /opt/keenkit.sh ] && U_INSTALLED=1 ;;
+        flashkeen) [ -f /opt/bin/flashkeen ] && U_INSTALLED=1 ;;
         hydra)
             if pkg_installed hrneo || pkg_installed hrweb; then U_INSTALLED=1; fi ;;
         awg) pkg_installed awg-manager && U_INSTALLED=1 ;;
@@ -1160,6 +1228,7 @@ u_remove() {
         nfqws-web) opkg remove --autoremove nfqws-keenetic-web || return 1 ;;
         nfqws-menu) u_remove_nfqws_menu || return 1 ;;
         keenkit) u_remove_keenkit || return 1 ;;
+        flashkeen) u_remove_flashkeen || return 1 ;;
         hydra)
             # Official standard removal. Remove UI before its backend; do not
             # invoke the upstream full cleanup that removes unrelated packages.
@@ -1271,6 +1340,11 @@ u_cleanup() {
         if [ "$U_CLEAN_ID" = hydra ] && [ "$U_CP" = /opt/bin/neo ] &&
            ! u_hydra_launcher; then
             say 'Чужая команда /opt/bin/neo сохранена.'
+            continue
+        fi
+        if [ "$U_CLEAN_ID" = flashkeen ] && [ "$U_CP" != /opt/bin/flashkeen ] &&
+           ! u_flashkeen_launcher "$U_CP"; then
+            say "Чужая команда $U_CP сохранена."
             continue
         fi
         rm -rf "$U_CP" || { err "Не удалось удалить $U_CP"; return 1; }
@@ -1473,7 +1547,7 @@ uninstall_menu() {
         U_LIST=''
         U_COUNT=0
         for U_SCAN_ID in nfqws nfqws2 nfqws-web nfqws-menu \
-                         keenkit hydra awg torrserver torr-watchdog; do
+                         keenkit hydra awg torrserver torr-watchdog flashkeen; do
             u_detect "$U_SCAN_ID"
             if [ "$U_INSTALLED" -eq 1 ] || [ "$U_LEFT" -eq 1 ]; then
                 U_COUNT=$((U_COUNT + 1))
@@ -1655,6 +1729,7 @@ show_installed_header() {
     header_has_pkg nfqws-keenetic-web && header_add_app nfqws-web
     [ -s /opt/nfqws-menu.sh ] && header_add_app nfqws-menu
     [ -f /opt/keenkit.sh ] && header_add_app KeenKit
+    [ -f /opt/bin/flashkeen ] && header_add_app Flashkeen
     if header_has_pkg hrneo || header_has_pkg hrweb; then
         header_add_app 'HydraRoute Neo'
     fi
@@ -1695,6 +1770,7 @@ menu() {
     say '  6. HydraRoute Neo'
     say '  7. AWG Manager'
     say '  8. TorrServer'
+    say '  9. Flashkeen'
     say ''
     say '=============== Утилиты ================'
     say ' 77. Конвертер Flowseal → nfqws2'
@@ -1718,6 +1794,7 @@ while :; do
         6|06) install_hydra ;;
         7|07) install_awg ;;
         8|08) torrserver_menu; continue ;;
+        9|09) install_flashkeen ;;
         77) launch_flowseal_converter; continue ;;
         88) uninstall_menu; continue ;;
         99) update_keenutils
