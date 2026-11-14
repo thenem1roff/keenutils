@@ -30,6 +30,7 @@ BACKUP=''
 LOCKED=0
 VERB=${1:-}
 SAVED=${2:-}
+PLAN_DIR=${3:-}
 
 say() { printf '%s\n' "$*"; }
 err() { printf 'Ошибка: %s\n' "$*" >&2; }
@@ -243,11 +244,84 @@ extract_references() {
     grep -Eo '/opt/etc/nfqws2/(lists|blobs|lua)/[A-Za-z0-9._-]+' \
         "$STAGE/nfqws2.conf" | LC_ALL=C sort -u > "$STAGE/references" || :
 }
+# Explicit list actions from the menu. Without a plan all stock lists stay intact.
+validate_list_plan() {
+    [ -n "$PLAN_DIR" ] || return 0
+    case "$PLAN_DIR" in "$STORE_HOME"/tmp/.stock-plan.*) : ;;
+        *) err 'Небезопасный каталог плана списков.'; return 1 ;;
+    esac
+    check_plain_dir "$PLAN_DIR" && check_plain_dir "$PLAN_DIR/lists" &&
+        check_plain_file "$PLAN_DIR/plan.tsv"
+}
+list_action() {
+    [ -f "$STAGE/list-actions.tsv" ] || return 1
+    awk -F '\t' -v name="$1" '$2==name {found=1; exit} END {exit !found}' \
+        "$STAGE/list-actions.tsv"
+}
+prepare_selected_lists() {
+    [ -n "$PLAN_DIR" ] || return 0
+    mkdir "$STAGE/stock-lists" || return 1
+    : > "$STAGE/list-actions.tsv"
+    : > "$STAGE/list-names"
+    tab=$(printf '\t')
+    while IFS="$tab" read -r list_mode list_name; do
+        [ -n "$list_mode" ] || continue
+        case "$list_mode" in replace|merge) : ;; *) return 1 ;; esac
+        case "$list_name" in
+            user.list|exclude.list|ipset.list|ipset_exclude.list|list-google.list) : ;;
+            *) return 1 ;;
+        esac
+        if grep -Fxq "$list_name" "$STAGE/list-names"; then return 1; fi
+        grep -Fxq "/opt/etc/nfqws2/lists/$list_name" "$STAGE/references" ||
+            { err "Список $list_name не используется стратегией."; return 1; }
+        check_plain_file "$PLAN_DIR/lists/$list_name" || return 1
+        [ -s "$PLAN_DIR/lists/$list_name" ] &&
+            [ "$(wc -c < "$PLAN_DIR/lists/$list_name")" -le 8388608 ] || return 1
+        target="$SYSTEM/lists/$list_name"
+        [ ! -L "$target" ] || return 1
+        [ ! -e "$target" ] || check_plain_file "$target" || return 1
+        staged="$STAGE/stock-lists/$list_name"
+        if [ "$list_mode" = merge ] && [ -f "$target" ]; then
+            cp "$target" "$staged" || return 1
+            awk '
+                NR==FNR {
+                    line=$0; sub(/\r$/, "", line)
+                    if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*#/) seen[line]=1
+                    next
+                }
+                {
+                    line=$0; sub(/\r$/, "", line)
+                    if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*#/ && !(line in seen)) {
+                        print line; seen[line]=1
+                    }
+                }
+            ' "$target" "$PLAN_DIR/lists/$list_name" >> "$staged" || return 1
+        else
+            cp "$PLAN_DIR/lists/$list_name" "$staged" || return 1
+        fi
+        printf '%s\t%s\n' "$list_mode" "$list_name" >> "$STAGE/list-actions.tsv"
+        printf '%s\n' "$list_name" >> "$STAGE/list-names"
+    done < "$PLAN_DIR/plan.tsv"
+}
+
 resource_for() {
     ref=$1
     case "$ref" in
         /opt/etc/nfqws2/lists/*)
-            SOURCE="$SAVED/lists/${ref##*/}" ;;
+            list_name=${ref##*/}
+            SOURCE="$SAVED/lists/$list_name"
+            if [ ! -e "$SOURCE" ] && [ ! -L "$SOURCE" ] &&
+                [ -f "$SAVED/lists/${SAVED##*/}-$list_name" ]; then
+                SOURCE="$SAVED/lists/${SAVED##*/}-$list_name"
+            fi
+            if list_action "$list_name"; then
+                SOURCE="$STAGE/stock-lists/$list_name"
+            else
+                case "$list_name" in
+                    user.list|exclude.list|ipset.list|ipset_exclude.list)
+                        SOURCE='' ;;
+                esac
+            fi ;;
         /opt/etc/nfqws2/blobs/*)
             SOURCE="$SAVED/blobs/${ref##*/}" ;;
         /opt/etc/nfqws2/lua/*)
@@ -353,6 +427,7 @@ prepare_missing_lua() {
 check_resources() {
     MISSING=0
     NEED=0
+    REPLACEMENTS=0
     COLLISIONS=0
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
@@ -362,8 +437,13 @@ check_resources() {
             COLLISIONS=$((COLLISIONS+1))
         elif [ -f "$DEST" ]; then
             if [ -f "$SOURCE" ] && ! cmp -s "$SOURCE" "$DEST"; then
-                say "Конфликт (различное содержимое): $ref"
-                COLLISIONS=$((COLLISIONS+1))
+                if list_action "${ref##*/}"; then
+                    say "Будет заменён (с резервной копией): $ref"
+                    REPLACEMENTS=$((REPLACEMENTS+1))
+                else
+                    say "Конфликт (различное содержимое): $ref"
+                    COLLISIONS=$((COLLISIONS+1))
+                fi
             else
                 say "Уже присутствует: $ref"
             fi
@@ -462,11 +542,13 @@ begin_stage() {
 validate_and_prepare() {
     ensure_paths || { err 'Не найдены безопасные пути к nfqws2, бинарному файлу или службе.';return 1; }
     ensure_saved || { err 'Папка стратегии за пределами хранилища или повреждена.';return 1; }
+    validate_list_plan || return 1
     begin_stage || return 1
     prepare_candidate || return 1
     normalize_extra_list_names || return 1
     normalize_list_refs || return 1
     extract_references
+    prepare_selected_lists || return 1
     prepare_missing_lua || return 1
     check_resources
 }
@@ -474,14 +556,14 @@ do_check() {
     validate_and_prepare || return 1
     say "Проверка совместимости: $SAVED"
     say "Текущий интерфейс/политика/очередь сохраняются из $CONF"
-    say "Необходимых копий: $NEED; отсутствует: $MISSING; конфликтов: $COLLISIONS"
+    say "Новых файлов: $NEED; замен: $REPLACEMENTS; отсутствует: $MISSING; конфликтов: $COLLISIONS"
     say 'Проверка статическая, реальный запуск будет проверен после применения.'
 }
 do_preview() {
     validate_and_prepare || return 1
     say '--- Изменения конфигурации (только просмотр) ---'
     diff -u "$CONF" "$STAGE/nfqws2.conf" || :
-    say "Новые файлы: $NEED. При применении рабочая конфигурация будет скопирована в $BACKUPS."
+    say "Новых файлов: $NEED; замен: $REPLACEMENTS. Резервные копии: $BACKUPS."
 }
 copy_new_files() {
     while IFS= read -r ref; do
