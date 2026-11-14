@@ -34,6 +34,14 @@ case "$1" in
             echo 'Mock nfqws2 refused strategy' >&2
             exit 1
         fi
+        if [ -f "$KEENUTILS_FLOWSEAL_TEST_ROOT/init-error-while-running" ]; then
+            : > "$state"
+            exit 1
+        fi
+        if [ -f "$KEENUTILS_FLOWSEAL_TEST_ROOT/init-success-while-stopped" ]; then
+            rm -f "$state"
+            exit 0
+        fi
         : > "$state"
         printf '%s\n' "$1" >> "$KEENUTILS_FLOWSEAL_TEST_ROOT/service-calls"
         echo 'Started NFQWS2 service' ;;
@@ -109,7 +117,11 @@ grep -Fq 'Подготовлен для копирования' "$work/check.log
 sh "$deployer" preview "$a" > "$work/preview.log"
 grep -Fq 'guest-policy' "$work/preview.log"
 test ! -e "$work/opt/running"
+# A nonzero init exit code does not mean the daemon failed to start.
+: > "$work/opt/init-error-while-running"
 sh "$deployer" apply "$a" > "$work/apply-a.log"
+rm -f "$work/opt/init-error-while-running"
+grep -Fq 'проверяю состояние службы' "$work/apply-a.log"
 test -f "$work/opt/running"
 test -f "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
 grep -Fq 'ISP_INTERFACE="ppp0"' "$base/nfqws2.conf"
@@ -159,4 +171,15 @@ sh "$deployer" undo > "$work/undo-original.log"
 test "$original" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
 test ! -e "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
 test ! -e "$work/opt/running"
+# A zero init exit code without a running daemon must not count as rollback.
+sh "$deployer" apply "$a" > "$work/reapply-a.log"
+sh "$deployer" apply "$a" > "$work/reapply-a-again.log"
+latest=$(cat "$KEENUTILS_FLOWSEAL_HOME/deployments/latest")
+: > "$work/opt/init-success-while-stopped"
+if sh "$deployer" undo > "$work/undo-dead-daemon.log" 2>&1; then
+    echo 'Rollback accepted an init-script success without running service' >&2
+    exit 1
+fi
+grep -Fq 'После восстановления служба nfqws2 не запущена' "$work/undo-dead-daemon.log"
+test ! -e "$KEENUTILS_FLOWSEAL_HOME/deployments/backups/$latest/restored"
 printf 'Transactional deployment, safe switching, multi-level rollback and failure recovery: OK\n'

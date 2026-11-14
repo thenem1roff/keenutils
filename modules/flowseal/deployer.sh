@@ -54,10 +54,25 @@ service_running() {
 service_restore() {
     previous=$1
     if [ "$previous" = yes ]; then
-        if service_running; then "$SERVICE" restart; else "$SERVICE" start; fi
+        if service_running; then
+            "$SERVICE" restart || say 'Init-скрипт вернул ошибку перезапуска; проверяю состояние.'
+        else
+            "$SERVICE" start || say 'Init-скрипт вернул ошибку запуска; проверяю состояние.'
+        fi
+        if ! service_running; then
+            err 'После восстановления служба nfqws2 не запущена.'
+            return 1
+        fi
     else
-        if service_running; then "$SERVICE" stop; else return 0; fi
+        if service_running; then
+            "$SERVICE" stop || say 'Init-скрипт вернул ошибку остановки; проверяю состояние.'
+        fi
+        if service_running; then
+            err 'После восстановления служба nfqws2 осталась запущенной.'
+            return 1
+        fi
     fi
+    return 0
 }
 safe_file_path() {
     case "$1" in
@@ -328,7 +343,10 @@ do_apply() {
         return 1
     fi
     if [ "$was" = yes ]; then action=restart;else action=start;fi
-    if ! "$SERVICE" "$action" || ! service_running; then
+    if ! "$SERVICE" "$action"; then
+        say 'Init-скрипт вернул ошибку запуска; проверяю состояние службы.'
+    fi
+    if ! service_running; then
         err 'nfqws2 не подтвердил успешный запуск.'
         return 1
     fi
@@ -370,8 +388,8 @@ do_undo() {
         rm -f "$ACTIVE"
     fi
     if check_plain_file "$backup/previous-latest"; then
-        cp "$backup/previous-latest" "$STORE/.latest.$" &&
-            mv "$STORE/.latest.$" "$LATEST" || return 1
+        cp "$backup/previous-latest" "$STORE/.latest.$$" &&
+            mv "$STORE/.latest.$$" "$LATEST" || return 1
     else
         rm -f "$LATEST"
     fi
