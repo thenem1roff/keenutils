@@ -284,7 +284,7 @@ prepare_selected_lists() {
         if [ "$list_mode" = merge ] && [ -f "$target" ]; then
             cp "$target" "$staged" || return 1
             awk '
-                NR==FNR {
+                FILENAME==ARGV[1] {
                     line=$0; sub(/\r$/, "", line)
                     if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*#/) seen[line]=1
                     next
@@ -507,7 +507,8 @@ check_replaced_lists() {
         check_plain_file "$original" &&
             check_plain_file "$1/replaced/$key" &&
             check_plain_file "$1/installed/$key" &&
-            cmp -s "$original" "$1/installed/$key" || {
+            { cmp -s "$original" "$1/installed/$key" ||
+              cmp -s "$original" "$1/replaced/$key"; } || {
                 err "Список $ref изменён после установки. Автоматический откат замены отменён."
                 return 1
             }
@@ -519,6 +520,7 @@ restore_replaced_lists() {
     while IFS="$tab" read -r ref key; do
         [ -n "$ref" ] || continue
         original=$(real_file "$ref") || return 1
+        cmp -s "$original" "$1/replaced/$key" && continue
         temporary=$(mktemp "$(dirname "$original")/.flowseal-list-restore.XXXXXX") || return 1
         if ! cp -p "$1/replaced/$key" "$temporary" ||
             ! mv -f "$temporary" "$original"; then
