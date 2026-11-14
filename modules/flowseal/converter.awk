@@ -227,14 +227,25 @@ function translate(p,i,key,value,any,cut,modes,n,j,mode,payload,spec_count,curmo
         diagnostic("info","game-profile-skipped","Game profile skipped",p)
         return
     }
+    # Two different Windows lists may map to one nfqws2 file.
+    # zapret2 >= 1.0.7 rejects repeated list paths of the same type
+    # inside one profile. Preserve the first occurrence and its order.
+    for (seen_key in unique_profile_lists) delete unique_profile_lists[seen_key]
     for(i=1;i<=size[p];i++){
         key=opt[p,i];value=val[p,i]
         if(PASS[key]){
             if(value==""){
                 diagnostic("warning","missing-value","Missing value for --" key,p);continue
             }
-            if(key=="hostlist"||key=="hostlist-exclude"||key=="ipset"||key=="ipset-exclude")
+            if(key=="hostlist"||key=="hostlist-exclude"||key=="ipset"||key=="ipset-exclude"){
                 value=list_ref(value,p)
+                seen_key=key SUBSEP value
+                if(seen_key in unique_profile_lists){
+                    diagnostic("info","merged-stock-list","Merged duplicate " key " reference: " value,p)
+                    continue
+                }
+                unique_profile_lists[seen_key]=1
+            }
             append(p,"--" key "=" value)
         }
         if(key=="filter-tcp")collect_ports(value,"TCP")
