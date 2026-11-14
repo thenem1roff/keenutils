@@ -28,10 +28,34 @@ fail() {
     exit 1
 }
 
+# Extract the upstream release tag from the binary; do not hardcode
+# a release family (upstream switched from MatriX.150 to Silo.2).
 version() {
-    "$1" --version 2>&1 |
-        sed -n 's/.*\(MatriX\.[0-9][0-9.]*\).*/\1/p' |
+    "$1" --version 2>&1 | awk '
+        {
+            for (i = 1; i <= NF; i++) {
+                tag = $i
+                sub(/^[^A-Za-z]*/, "", tag)
+                sub(/[^A-Za-z0-9.]*$/, "", tag)
+                if (tag ~ /^[A-Za-z][A-Za-z0-9]*\.[0-9]+(\.[0-9]+)*$/) {
+                    print tag
+                    exit
+                }
+            }
+        }'
+}
+valid_version() {
+    printf '%s\n' "$1" |
+        grep -Eq '^[A-Za-z][A-Za-z0-9]*\.[0-9]+(\.[0-9]+)*$'
+}
+json_field() {
+    printf '%s\n' "$1" |
+        sed -n "s/^[[:space:]]*\"$2\": *\"\([^\"]*\)\".*/\1/p" |
         head -n 1
+}
+valid_release_date() {
+    printf '%s\n' "$1" |
+        grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 }
 
 echo "=== TorrServer Updater ==="
@@ -95,7 +119,7 @@ ensure_command rm coreutils-rm
 ensure_command pgrep procps-ng-pgrep
 
 CURRENT=$(version "$BIN")
-[ -n "$CURRENT" ] ||
+valid_version "$CURRENT" ||
     fail "Не удалось определить установленную версию"
 
 echo "Установлена: $CURRENT"
@@ -105,14 +129,9 @@ RELEASE=$(curl -fsSL --retry 2 \
     --connect-timeout 10 --max-time 30 "$API") ||
     fail "GitHub API недоступен"
 
-LATEST=$(printf '%s\n' "$RELEASE" |
-    sed -n 's/^[[:space:]]*"tag_name": *"\([^"]*\)".*/\1/p' |
-    head -n 1)
-
-case "$LATEST" in
-    MatriX.[0-9]*) ;;
-    *) fail "Некорректная версия релиза: $LATEST" ;;
-esac
+LATEST=$(json_field "$RELEASE" tag_name)
+valid_version "$LATEST" ||
+    fail "Некорректная версия релиза: $LATEST"
 
 echo "Доступна:    $LATEST"
 
@@ -121,20 +140,35 @@ if [ "$CURRENT" = "$LATEST" ]; then
     exit 0
 fi
 
-# Сравнение числовых компонентов версии
+# Compare numbers within one series. For different series use official
+# release publication dates: Silo.2 is newer than MatriX.150.
 is_newer() {
-    awk -v old="${CURRENT#MatriX.}" \
-        -v new="${LATEST#MatriX.}" '
-        BEGIN {
-            a = split(old, x, ".")
-            b = split(new, y, ".")
-            n = (a > b ? a : b)
-            for (i = 1; i <= n; i++) {
-                if ((y[i] + 0) > (x[i] + 0)) exit 0
-                if ((y[i] + 0) < (x[i] + 0)) exit 1
-            }
-            exit 1
-        }'
+    if [ "${CURRENT%%.*}" = "${LATEST%%.*}" ]; then
+        awk -v old="${CURRENT#*.}" -v new="${LATEST#*.}" '
+            BEGIN {
+                a = split(old, x, ".")
+                b = split(new, y, ".")
+                n = (a > b ? a : b)
+                for (i = 1; i <= n; i++) {
+                    if ((y[i] + 0) > (x[i] + 0)) exit 0
+                    if ((y[i] + 0) < (x[i] + 0)) exit 1
+                }
+                exit 1
+            }'
+        return $?
+    fi
+
+    # Validated release tags cannot inject paths or shell commands.
+    CURRENT_RELEASE=$(curl -fsSL --retry 2 \
+        --connect-timeout 10 --max-time 30 \
+        "https://api.github.com/repos/YouROK/TorrServer/releases/tags/$CURRENT") ||
+        fail "Не удалось проверить дату релиза установленной версии: $CURRENT"
+    CURRENT_DATE=$(json_field "$CURRENT_RELEASE" published_at)
+    LATEST_DATE=$(json_field "$RELEASE" published_at)
+    valid_release_date "$CURRENT_DATE" && valid_release_date "$LATEST_DATE" ||
+        fail 'GitHub не вернул проверяемые даты релизов; обновление отменено.'
+    awk -v old="$CURRENT_DATE" -v new="$LATEST_DATE" \
+        'BEGIN { exit !(new > old) }'
 }
 
 if ! is_newer; then
