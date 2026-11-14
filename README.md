@@ -34,6 +34,9 @@ utils
 | 6 | **HydraRoute Neo** | Маршрутизация трафика через выбранные подключения. |
 | 7 | **AWG Manager** | Управление туннелями AmneziaWG. |
 | 8 | **TorrServer** | Торрент-стриминг, обновление и обслуживание службы. |
+| 9 | **Flashkeen** | Установка и запуск меню управления дисками и Entware. |
+
+Пункт **9** устанавливает Flashkeen из официального проекта, если он отсутствует, и открывает его меню. После выхода управление возвращается в KeenUtils. Удаление доступно через **88 → Flashkeen**: удаляется сама программа и подтверждённые команды запуска; дисковые утилиты, KeenKit и резервные копии сохраняются.
 
 ## Дополнительные инструменты
 
@@ -57,6 +60,7 @@ KeenUtils — независимый проект, не являющийся о�
 - [nfqws-web](https://github.com/nfqws/nfqws-keenetic-web)
 - [nfqws-menu](https://github.com/rndnaame/nfqws-menu)
 - [KeenKit](https://github.com/spatiumstas/KeenKit)
+- [Flashkeen](https://github.com/miha75vu-bit/Flashkeen)
 - [HydraRoute Neo](https://github.com/Ground-Zerro/HydraRoute/tree/main/Neo)
 - [AWG Manager](https://github.com/hoaxisr/awg-manager)
 - [TorrServer](https://github.com/YouROK/TorrServer)
