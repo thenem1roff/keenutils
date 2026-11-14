@@ -67,12 +67,32 @@ saved="$STRATEGIES/flowseal-1.10.4-alt13"
 test -f "$saved/info.json"
 test -f "$saved/nfqws2.conf"
 test -f "$saved/REPORT.md"
-test -f "$saved/lists/flowseal-1.10.4-alt13-list-google.list"
+test -f "$saved/lists/list-google.list"
 test -f "$saved/blobs/flowseal-1.10.4-alt13-tls_clienthello_sochi_park.bin"
 jq -e '.name=="ALT13" and .version=="1.10.4" and .game_ports==true
         and .state=="saved_only" and .release_tree_sha=="176f56dc3f11ce5915c26abcdde903f93d835b64"' \
     "$saved/info.json" >/dev/null
 sh -n "$saved/nfqws2.conf"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/list-google.list' "$saved/nfqws2.conf"
+# Download absent saved resources without replacing existing saved files.
+selected_dir="$saved"
+before_md5=$(sha256sum "$saved/nfqws2.conf" | awk '{print $1}')
+rm "$saved/lists/list-google.list"
+recover_saved_resources > "$work/recover.log"
+test -s "$saved/lists/list-google.list"
+grep -Fq 'Скачан: lists/list-google.list' "$work/recover.log"
+test "$(sha256sum "$saved/nfqws2.conf" | awk '{print $1}')" = "$before_md5"
+# The per-file plan downloads from this strategy's pinned Flowseal release.
+list_choice() {
+    if [ "$3" = list-google.list ]; then LIST_CHOICE=merge
+    else LIST_CHOICE=''
+    fi
+}
+printf 'y\n' | prepare_apply_list_plan > "$work/plan.log"
+test -s "$LIST_PLAN/plan.tsv"
+grep -Fq "$(printf 'merge\tlist-google.list')" "$LIST_PLAN/plan.tsv"
+cmp "$saved/lists/list-google.list" "$LIST_PLAN/lists/list-google.list"
+cleanup
 validation=0
 sh "$RUNTIME/validator.sh" "$saved" > "$work/validation.log" || validation=$?
 [ "$validation" -eq 2 ]
