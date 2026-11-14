@@ -39,9 +39,9 @@ case "$*" in
         stable=$(cat /tmp/keenutils-ts-latest)
         case "$stable" in
             MatriX.147.2|MatriX.150)
-                printf '[\n  {"tag_name": "Silo.2"},\n  {"tag_name": "%s"}\n]\n' "$stable" ;;
+                printf '[\n  {\n    "tag_name": "Silo.2"\n  },\n  {\n    "tag_name": "%s"\n  }\n]\n' "$stable" ;;
             none)
-                printf '[\n  {"tag_name": "Silo.2"}\n]\n' ;;
+                printf '[\n  {\n    "tag_name": "Silo.2"\n  }\n]\n' ;;
             *) exit 2 ;;
         esac ;;
     *releases/download/*/TorrServer-linux-arm64*)
