@@ -33,24 +33,17 @@ MOCK_PGREP
 cat >/opt/bin/curl <<'MOCK_CURL'
 #!/bin/sh
 case "$*" in
-    *api.github.com/repos/YouROK/TorrServer/releases/latest*)
-        latest=$(cat /tmp/keenutils-ts-latest)
-        case "$latest" in
-            MatriX.147.2) published='2026-10-29T03:19:05Z' ;;
-            Silo.2) published='2026-11-14T14:08:30Z' ;;
-            Nova.1) published='2026-11-15T14:08:30Z' ;;
+    *api.github.com/repos/YouROK/TorrServer/releases?per_page=30*)
+        # The first release is the explicitly unfinished Silo rewrite.
+        # The updater must select the newest production MatriX release.
+        stable=$(cat /tmp/keenutils-ts-latest)
+        case "$stable" in
+            MatriX.147.2|MatriX.150)
+                printf '[\n  {\n    "tag_name": "Silo.2"\n  },\n  {\n    "tag_name": "%s"\n  }\n]\n' "$stable" ;;
+            none)
+                printf '[\n  {\n    "tag_name": "Silo.2"\n  }\n]\n' ;;
             *) exit 2 ;;
-        esac
-        printf '{\n  "tag_name": "%s",\n  "published_at": "%s"\n}\n' "$latest" "$published" ;;
-    *api.github.com/repos/YouROK/TorrServer/releases/tags/*)
-        case "$*" in
-            *releases/tags/MatriX.141*) published='2026-08-01T00:00:00Z' ;;
-            *releases/tags/MatriX.150*) published='2026-11-06T17:56:32Z' ;;
-            *releases/tags/Silo.2*) published='2026-11-14T14:08:30Z' ;;
-            *releases/tags/Silo.3*) published='2026-11-15T12:00:00Z' ;;
-            *) exit 2 ;;
-        esac
-        printf '{\n  "published_at": "%s"\n}\n' "$published" ;;
+        esac ;;
     *releases/download/*/TorrServer-linux-arm64*)
         dest=''
         tag=''
@@ -194,42 +187,40 @@ grep -Fq 'API: HTTP 401' /tmp/keenutils-ts-auth.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.147.2'
 
 
-# Upstream renamed the series: MatriX.150 -> Silo.2. Publication dates,
-# not the numeric suffix alone, determine chronology across series.
+# Silo is published as "latest", but it is an unfinished rewrite and must
+# not replace an installed, working MatriX server.
 reset_binary MatriX.150
-printf 'Silo.2\n' >/tmp/keenutils-ts-latest
+printf 'MatriX.150\n' >/tmp/keenutils-ts-latest
 echo normal >/tmp/keenutils-ts-mode
-sh ./torrserver >/tmp/keenutils-ts-silo.log 2>&1
-grep -Fq 'Обновление: MatriX.150 -> Silo.2' /tmp/keenutils-ts-silo.log
-grep -Fq 'TorrServer успешно обновлён!' /tmp/keenutils-ts-silo.log
-/opt/sbin/torrserver --version | grep -Fq 'Silo.2'
-/opt/sbin/torrserver.backup --version | grep -Fq 'MatriX.150'
+sh ./torrserver >/tmp/keenutils-ts-silo-skip.log 2>&1
+grep -Fq 'Доступна:    MatriX.150' /tmp/keenutils-ts-silo-skip.log
+grep -Fq 'TorrServer уже обновлён.' /tmp/keenutils-ts-silo-skip.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.150'
 
-# The current Silo release must be detected as already installed.
-reset_binary Silo.2
-sh ./torrserver >/tmp/keenutils-ts-silo-current.log 2>&1
-grep -Fq 'TorrServer уже обновлён.' /tmp/keenutils-ts-silo-current.log
-/opt/sbin/torrserver --version | grep -Fq 'Silo.2'
-
-# Never downgrade across series.
-reset_binary Silo.2
+# MatriX.150 is newer than the available working MatriX.147.2.
+reset_binary MatriX.150
 printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
-sh ./torrserver >/tmp/keenutils-ts-silo-downgrade.log 2>&1
-grep -Fq 'Установленная версия не старее релиза.' /tmp/keenutils-ts-silo-downgrade.log
+sh ./torrserver >/tmp/keenutils-ts-no-downgrade.log 2>&1
+grep -Fq 'Установленная версия не старее релиза.' /tmp/keenutils-ts-no-downgrade.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.150'
+
+# Do not modify an already installed experimental Silo version.
+reset_binary Silo.2
+if sh ./torrserver >/tmp/keenutils-ts-block-silo.log 2>&1; then
+    echo 'Updater accepted unsupported installed Silo release' >&2
+    exit 1
+fi
+grep -Fq 'Автоматическое обновление разрешено только для рабочей MatriX' /tmp/keenutils-ts-block-silo.log
 /opt/sbin/torrserver --version | grep -Fq 'Silo.2'
 
-# Never downgrade within one release series.
-reset_binary Silo.3
-printf 'Silo.2\n' >/tmp/keenutils-ts-latest
-sh ./torrserver >/tmp/keenutils-ts-silo3.log 2>&1
-grep -Fq 'Установленная версия не старее релиза.' /tmp/keenutils-ts-silo3.log
-/opt/sbin/torrserver --version | grep -Fq 'Silo.3'
+# If no MatriX release can be found, fail safely before touching binaries.
+reset_binary MatriX.141
+printf 'none\n' >/tmp/keenutils-ts-latest
+if sh ./torrserver >/tmp/keenutils-ts-no-stable.log 2>&1; then
+    echo 'Updater accepted experimental-only release list' >&2
+    exit 1
+fi
+grep -Fq 'Не найден проверенный релиз MatriX' /tmp/keenutils-ts-no-stable.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
 
-# Future series names are supported without adding hardcoded names.
-reset_binary Silo.2
-printf 'Nova.1\n' >/tmp/keenutils-ts-latest
-sh ./torrserver >/tmp/keenutils-ts-nova.log 2>&1
-grep -Fq 'Обновление: Silo.2 -> Nova.1' /tmp/keenutils-ts-nova.log
-/opt/sbin/torrserver --version | grep -Fq 'Nova.1'
-
-echo 'TorrServer updater: cold start, stop-code mismatch, blocked swap, rollback, API, auth and renamed release tests passed.'
+echo 'TorrServer updater: service safety, rollback, API, auth, production MatriX selection and experimental Silo exclusions passed.'
