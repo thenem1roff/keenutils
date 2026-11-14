@@ -29,7 +29,7 @@ grep -Fq -- '--blob=tls:' "$conf"
 grep -Fq -- '--lua-desync=fake:blob=tls:tcp_ts=-600000:repeats=5' "$conf"
 grep -Fq -- '--lua-desync=zk_hostfakesplit_alt1:host=mail.ru:tcp_ts=-600000:repeats=5' "$conf"
 grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/user.list' "$conf"
-grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/flowseal-list-google.list' "$conf"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/list-google.list' "$conf"
 grep -Fq -- '--lua-init=assert(load' "$conf"
 grep -Fq -- 'PROFILES_READ=4' "$tmp/output/stats.txt"
 grep -Fq -- 'PROFILES_WRITTEN=3' "$tmp/output/stats.txt"
@@ -50,6 +50,9 @@ FLOWSEAL_OUTPUT="$tmp/output-alt12" FLOWSEAL_GAMES=no FLOWSEAL_INTERFACE=eth3 \
     awk -f modules/flowseal/converter.awk \
     "tests/fixtures/flowseal/general (ALT12).bat"
 sh -n "$tmp/output-alt12/nfqws2.conf"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/list-google.list' "$tmp/output-alt12/nfqws2.conf"
+grep -Fq "$(printf 'list-google.txt\tlist-google.list')" "$tmp/output-alt12/lists.manifest"
+! grep -Fq -- 'flowseal-list-google.list' "$tmp/output-alt12/nfqws2.conf"
 awk '
     function clear_profile(k) { for (k in seen) delete seen[k] }
     /^NFQWS_ARGS(_CUSTOM|_QUIC|_UDP|_IPSET)?=/ { active=1; clear_profile() }

@@ -143,7 +143,7 @@ function list_ref(raw,p,name,dest){
     if(name=="ipset-all.txt")return ROOT "/lists/ipset.list"
     if(name=="ipset-exclude.txt"||name=="ipset-exclude-user.txt")
         return ROOT "/lists/ipset_exclude.list"
-    dest=name;sub(/\.txt$/,"",dest);dest=PREFIX "-" dest ".list"
+    dest=name;sub(/\.txt$/,"",dest);dest=dest ".list"
     if(!(dest in lists_added)){
         print name "\t" dest >> (OUT "/lists.manifest")
         lists_added[dest]=1

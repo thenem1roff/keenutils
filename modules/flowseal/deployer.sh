@@ -30,6 +30,7 @@ BACKUP=''
 LOCKED=0
 VERB=${1:-}
 SAVED=${2:-}
+PLAN_DIR=${3:-}
 
 say() { printf '%s\n' "$*"; }
 err() { printf 'Ошибка: %s\n' "$*" >&2; }
@@ -155,6 +156,38 @@ prepare_candidate() {
 # lists mapped to the same nfqws2 path. zapret2 >= v1.0.7 rejects a second
 # registration of an identical file/type inside the same --new profile.
 # Repair only the STAGED candidate; never rewrite saved or live configs here.
+# Old saved drafts use long names (flowseal-VERSION-ALT-list-google.list).
+# Update only the staged candidate using the original manifest, not the
+# saved source or the live config. The source file remains available under
+# its original name and is mapped by resource_for().
+normalize_extra_list_names() {
+    check_plain_file "$SAVED/lists.manifest" || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r origin legacy; do
+        printf '%s\n' "$origin" | grep -Eq '^[A-Za-z0-9._-]+[.]txt$' || return 1
+        printf '%s\n' "$legacy" | grep -Eq '^[A-Za-z0-9._-]+[.]list$' || return 1
+        case "$legacy" in
+            "${SAVED##*/}"-*) : ;;
+            *) continue ;;
+        esac
+        short="${origin%.txt}.list"
+        [ "$legacy" = "$short" ] && continue
+        old="/opt/etc/nfqws2/lists/$legacy"
+        replacement="/opt/etc/nfqws2/lists/$short"
+        tmp="$STAGE/.list-rename.$$"
+        awk -v old="$old" -v replacement="$replacement" '
+            {
+                text=$0
+                while ((pos=index(text,old))>0)
+                    text=substr(text,1,pos-1) replacement substr(text,pos+length(old))
+                print text
+            }
+        ' "$STAGE/nfqws2.conf" > "$tmp" || return 1
+        mv "$tmp" "$STAGE/nfqws2.conf" || return 1
+    done < "$SAVED/lists.manifest"
+    sh -n "$STAGE/nfqws2.conf"
+}
+
 normalize_list_refs() {
     normalized="$STAGE/nfqws2.normalized"
     if ! awk '
@@ -211,11 +244,84 @@ extract_references() {
     grep -Eo '/opt/etc/nfqws2/(lists|blobs|lua)/[A-Za-z0-9._-]+' \
         "$STAGE/nfqws2.conf" | LC_ALL=C sort -u > "$STAGE/references" || :
 }
+# Explicit list actions from the menu. Without a plan all stock lists stay intact.
+validate_list_plan() {
+    [ -n "$PLAN_DIR" ] || return 0
+    case "$PLAN_DIR" in "$STORE_HOME"/tmp/.stock-plan.*) : ;;
+        *) err 'Небезопасный каталог плана списков.'; return 1 ;;
+    esac
+    check_plain_dir "$PLAN_DIR" && check_plain_dir "$PLAN_DIR/lists" &&
+        check_plain_file "$PLAN_DIR/plan.tsv"
+}
+list_action() {
+    [ -f "$STAGE/list-actions.tsv" ] || return 1
+    awk -F '\t' -v name="$1" '$2==name {found=1; exit} END {exit !found}' \
+        "$STAGE/list-actions.tsv"
+}
+prepare_selected_lists() {
+    [ -n "$PLAN_DIR" ] || return 0
+    mkdir "$STAGE/stock-lists" || return 1
+    : > "$STAGE/list-actions.tsv"
+    : > "$STAGE/list-names"
+    tab=$(printf '\t')
+    while IFS="$tab" read -r list_mode list_name; do
+        [ -n "$list_mode" ] || continue
+        case "$list_mode" in replace|merge) : ;; *) return 1 ;; esac
+        case "$list_name" in
+            user.list|exclude.list|ipset.list|ipset_exclude.list|list-google.list) : ;;
+            *) return 1 ;;
+        esac
+        if grep -Fxq "$list_name" "$STAGE/list-names"; then return 1; fi
+        grep -Fxq "/opt/etc/nfqws2/lists/$list_name" "$STAGE/references" ||
+            { err "Список $list_name не используется стратегией."; return 1; }
+        check_plain_file "$PLAN_DIR/lists/$list_name" || return 1
+        [ -s "$PLAN_DIR/lists/$list_name" ] &&
+            [ "$(wc -c < "$PLAN_DIR/lists/$list_name")" -le 8388608 ] || return 1
+        target="$SYSTEM/lists/$list_name"
+        [ ! -L "$target" ] || return 1
+        [ ! -e "$target" ] || check_plain_file "$target" || return 1
+        staged="$STAGE/stock-lists/$list_name"
+        if [ "$list_mode" = merge ] && [ -f "$target" ]; then
+            cp "$target" "$staged" || return 1
+            awk '
+                FILENAME==ARGV[1] {
+                    line=$0; sub(/\r$/, "", line)
+                    if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*#/) seen[line]=1
+                    next
+                }
+                {
+                    line=$0; sub(/\r$/, "", line)
+                    if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*#/ && !(line in seen)) {
+                        print line; seen[line]=1
+                    }
+                }
+            ' "$target" "$PLAN_DIR/lists/$list_name" >> "$staged" || return 1
+        else
+            cp "$PLAN_DIR/lists/$list_name" "$staged" || return 1
+        fi
+        printf '%s\t%s\n' "$list_mode" "$list_name" >> "$STAGE/list-actions.tsv"
+        printf '%s\n' "$list_name" >> "$STAGE/list-names"
+    done < "$PLAN_DIR/plan.tsv"
+}
+
 resource_for() {
     ref=$1
     case "$ref" in
         /opt/etc/nfqws2/lists/*)
-            SOURCE="$SAVED/lists/${ref##*/}" ;;
+            list_name=${ref##*/}
+            SOURCE="$SAVED/lists/$list_name"
+            if [ ! -e "$SOURCE" ] && [ ! -L "$SOURCE" ] &&
+                [ -f "$SAVED/lists/${SAVED##*/}-$list_name" ]; then
+                SOURCE="$SAVED/lists/${SAVED##*/}-$list_name"
+            fi
+            if list_action "$list_name"; then
+                SOURCE="$STAGE/stock-lists/$list_name"
+            else
+                case "$list_name" in
+                    user.list|exclude.list|ipset.list|ipset_exclude.list)
+                        SOURCE='' ;;
+                esac
+            fi ;;
         /opt/etc/nfqws2/blobs/*)
             SOURCE="$SAVED/blobs/${ref##*/}" ;;
         /opt/etc/nfqws2/lua/*)
@@ -321,6 +427,7 @@ prepare_missing_lua() {
 check_resources() {
     MISSING=0
     NEED=0
+    REPLACEMENTS=0
     COLLISIONS=0
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
@@ -330,8 +437,13 @@ check_resources() {
             COLLISIONS=$((COLLISIONS+1))
         elif [ -f "$DEST" ]; then
             if [ -f "$SOURCE" ] && ! cmp -s "$SOURCE" "$DEST"; then
-                say "Конфликт (различное содержимое): $ref"
-                COLLISIONS=$((COLLISIONS+1))
+                if list_action "${ref##*/}"; then
+                    say "Будет заменён (с резервной копией): $ref"
+                    REPLACEMENTS=$((REPLACEMENTS+1))
+                else
+                    say "Конфликт (различное содержимое): $ref"
+                    COLLISIONS=$((COLLISIONS+1))
+                fi
             else
                 say "Уже присутствует: $ref"
             fi
@@ -382,12 +494,51 @@ rollback_files() {
         done < "$backup/created.tsv"
     fi
 }
+# Restore replaced list files BEFORE restarting the previous nfqws2 config.
+# If someone edited a list after deployment, do not overwrite their changes.
+check_replaced_lists() {
+    [ -f "$1/replaced.tsv" ] || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ref key; do
+        [ -n "$ref" ] || continue
+        case "$ref" in /opt/etc/nfqws2/lists/*) : ;; *) return 1 ;; esac
+        safe_file_path "$ref" || return 1
+        original=$(real_file "$ref") || return 1
+        check_plain_file "$original" &&
+            check_plain_file "$1/replaced/$key" &&
+            check_plain_file "$1/installed/$key" &&
+            { cmp -s "$original" "$1/installed/$key" ||
+              cmp -s "$original" "$1/replaced/$key"; } || {
+                err "Список $ref изменён после установки. Автоматический откат замены отменён."
+                return 1
+            }
+    done < "$1/replaced.tsv"
+}
+restore_replaced_lists() {
+    [ -f "$1/replaced.tsv" ] || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ref key; do
+        [ -n "$ref" ] || continue
+        original=$(real_file "$ref") || return 1
+        cmp -s "$original" "$1/replaced/$key" && continue
+        temporary=$(mktemp "$(dirname "$original")/.flowseal-list-restore.XXXXXX") || return 1
+        if ! cp -p "$1/replaced/$key" "$temporary" ||
+            ! mv -f "$temporary" "$original"; then
+            rm -f "$temporary"
+            return 1
+        fi
+    done < "$1/replaced.tsv"
+}
+
 restore_snapshot() {
     backup=$1
     check_plain_file "$backup/nfqws2.conf" || return 1
     was=$(cat "$backup/was-running") || return 1
     case "$was" in yes|no) : ;; *) return 1 ;; esac
-    # Keep resource files until the old daemon has been restored.
+    # Restore overwritten list contents before daemon restarts.
+    check_replaced_lists "$backup" || return 1
+    restore_replaced_lists "$backup" || return 1
+    # Keep new resources until the old daemon has been restored.
     atomic_config "$backup/nfqws2.conf" || return 1
     if ! service_restore "$was"; then
         err 'Не удалось восстановить работу службы; резервная копия сохранена.'
@@ -430,10 +581,13 @@ begin_stage() {
 validate_and_prepare() {
     ensure_paths || { err 'Не найдены безопасные пути к nfqws2, бинарному файлу или службе.';return 1; }
     ensure_saved || { err 'Папка стратегии за пределами хранилища или повреждена.';return 1; }
+    validate_list_plan || return 1
     begin_stage || return 1
     prepare_candidate || return 1
+    normalize_extra_list_names || return 1
     normalize_list_refs || return 1
     extract_references
+    prepare_selected_lists || return 1
     prepare_missing_lua || return 1
     check_resources
 }
@@ -441,25 +595,34 @@ do_check() {
     validate_and_prepare || return 1
     say "Проверка совместимости: $SAVED"
     say "Текущий интерфейс/политика/очередь сохраняются из $CONF"
-    say "Необходимых копий: $NEED; отсутствует: $MISSING; конфликтов: $COLLISIONS"
+    say "Новых файлов: $NEED; замен: $REPLACEMENTS; отсутствует: $MISSING; конфликтов: $COLLISIONS"
     say 'Проверка статическая, реальный запуск будет проверен после применения.'
 }
 do_preview() {
     validate_and_prepare || return 1
     say '--- Изменения конфигурации (только просмотр) ---'
     diff -u "$CONF" "$STAGE/nfqws2.conf" || :
-    say "Новые файлы: $NEED. При применении рабочая конфигурация будет скопирована в $BACKUPS."
+    say "Новых файлов: $NEED; замен: $REPLACEMENTS. Резервные копии: $BACKUPS."
 }
 copy_new_files() {
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
         resource_for "$ref" || return 1
-        [ -f "$DEST" ] && continue
-        check_plain_file "$SOURCE" || return 1
         key=$(printf '%s' "$ref" | tr '/' '_')
-        cp "$SOURCE" "$BACKUP/resources/$key" || return 1
-        # Write undo journal BEFORE moving the file into place.
-        printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/created.tsv" || return 1
+        if [ -f "$DEST" ]; then
+            # Never modify an existing file without an explicit list plan.
+            list_action "${ref##*/}" || continue
+            check_plain_file "$DEST" && check_plain_file "$SOURCE" || return 1
+            cmp -s "$SOURCE" "$DEST" && continue
+            cp -p "$DEST" "$BACKUP/replaced/$key" || return 1
+            cp "$SOURCE" "$BACKUP/installed/$key" || return 1
+            printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/replaced.tsv" || return 1
+        else
+            check_plain_file "$SOURCE" || return 1
+            cp "$SOURCE" "$BACKUP/resources/$key" || return 1
+            # Write undo journal BEFORE moving a new file into place.
+            printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/created.tsv" || return 1
+        fi
         new_tmp=$(mktemp "$(dirname "$DEST")/.flowseal-bin.XXXXXX") || return 1
         if ! cp "$SOURCE" "$new_tmp" || ! chmod 644 "$new_tmp" ||
             ! mv "$new_tmp" "$DEST"; then
@@ -472,9 +635,10 @@ do_apply() {
     validate_and_prepare || return 1
     acquire_lock || return 1
     BACKUP="$BACKUPS/$(date -u '+%Y%m%d-%H%M%S')-$$"
-    mkdir "$BACKUP" && mkdir "$BACKUP/resources" || return 1
+    mkdir "$BACKUP" && mkdir "$BACKUP/resources" "$BACKUP/replaced" "$BACKUP/installed" || return 1
     cp -p "$CONF" "$BACKUP/nfqws2.conf" || return 1
     : > "$BACKUP/created.tsv"
+    : > "$BACKUP/replaced.tsv"
     if service_running; then was=yes;else was=no;fi
     printf '%s\n' "$was" > "$BACKUP/was-running" || return 1
     if check_plain_file "$ACTIVE"; then
