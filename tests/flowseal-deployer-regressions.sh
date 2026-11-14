@@ -190,15 +190,40 @@ test -f "$base/blobs/flowseal-1.10.4-alt13-fake.bin"
 grep -Fq 'flowseal-1.10.4-alt13' "$KEENUTILS_FLOWSEAL_HOME/deployments/active"
 sh "$deployer" undo > "$work/undo.log"
 test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
+# Explicit per-file merge: keep stock entries and append only new lines.
+mkdir -p "$KEENUTILS_FLOWSEAL_HOME/tmp/.stock-plan.merge/lists"
+merge_plan="$KEENUTILS_FLOWSEAL_HOME/tmp/.stock-plan.merge"
+printf 'merge\tuser.list\n' > "$merge_plan/plan.tsv"
+printf 'example.org\nnew.example\nnew.example\n' > "$merge_plan/lists/user.list"
+sh "$deployer" apply "$b" "$merge_plan" > "$work/merge-lists.log"
+test "$(grep -Fxc example.org "$base/lists/user.list")" -eq 1
+test "$(grep -Fxc new.example "$base/lists/user.list")" -eq 1
+test -f "$KEENUTILS_FLOWSEAL_HOME/deployments/backups/$(cat "$KEENUTILS_FLOWSEAL_HOME/deployments/latest")/replaced/_opt_etc_nfqws2_lists_user.list"
+sh "$deployer" undo > "$work/undo-merge.log"
+test "$(cat "$base/lists/user.list")" = example.org
+test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
+# Explicit replacement must be reversible as well.
+mkdir -p "$KEENUTILS_FLOWSEAL_HOME/tmp/.stock-plan.replace/lists"
+replace_plan="$KEENUTILS_FLOWSEAL_HOME/tmp/.stock-plan.replace"
+printf 'replace\tuser.list\n' > "$replace_plan/plan.tsv"
+printf 'from-flowseal.example\n' > "$replace_plan/lists/user.list"
+sh "$deployer" apply "$b" "$replace_plan" > "$work/replace-lists.log"
+test "$(cat "$base/lists/user.list")" = from-flowseal.example
+sh "$deployer" undo > "$work/undo-replace.log"
+test "$(cat "$base/lists/user.list")" = example.org
+test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
+# Without explicit list actions, stock files must stay untouched.
+test "$(cat "$base/lists/exclude.list")" = example.org
 test ! -e "$base/blobs/flowseal-1.10.4-alt13-fake.bin"
 test -e "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
 test -f "$work/opt/running"
 # Failed service restart must restore previous config and remove new blob.
 printf '%s\n' 'NFQWS_ARGS="FORCE_FAIL"' >> "$b/nfqws2.conf"
-if sh "$deployer" apply "$b" > "$work/failure.log" 2>&1; then
+if sh "$deployer" apply "$b" "$replace_plan" > "$work/failure.log" 2>&1; then
     echo 'Failed daemon restart was accepted' >&2;exit 1
 fi
 grep -Fq 'восстанавливается прежняя конфигурация' "$work/failure.log"
+test "$(cat "$base/lists/user.list")" = example.org
 test "$first" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
 test ! -e "$base/blobs/flowseal-1.10.4-alt13-fake.bin"
 test -f "$work/opt/running"
