@@ -151,6 +151,60 @@ prepare_candidate() {
     fi
     sh -n "$STAGE/nfqws2.conf" || return 1
 }
+# Saved strategies from older converter versions may contain two Windows
+# lists mapped to the same nfqws2 path. zapret2 >= v1.0.7 rejects a second
+# registration of an identical file/type inside the same --new profile.
+# Repair only the STAGED candidate; never rewrite saved or live configs here.
+normalize_list_refs() {
+    normalized="$STAGE/nfqws2.normalized"
+    if ! awk '
+        function reset_lists( key ) {
+            for (key in seen) delete seen[key]
+        }
+        /^[A-Z_][A-Z0-9_]*=/ {
+            active = ($0 ~ /^NFQWS_ARGS(_CUSTOM|_QUIC|_UDP|_IPSET)?=/)
+            reset_lists()
+        }
+        {
+            if (!active) {
+                print
+                next
+            }
+            rest = $0
+            out = ""
+            while (match(rest, /--new|--(hostlist(-exclude)?|ipset(-exclude)?)=\/opt\/etc\/nfqws2\/lists\/[A-Za-z0-9._-]+/)) {
+                prefix = substr(rest, 1, RSTART - 1)
+                option = substr(rest, RSTART, RLENGTH)
+                out = out prefix
+                if (option == "--new") {
+                    reset_lists()
+                    out = out option
+                } else if (!(option in seen)) {
+                    seen[option] = 1
+                    out = out option
+                } else {
+                    removed++
+                }
+                rest = substr(rest, RSTART + RLENGTH)
+            }
+            print out rest
+        }
+        END {
+            if (removed > 0)
+                printf "Убрано повторных ссылок на списки в профилях: %d\n", removed > "/dev/stderr"
+        }
+    ' "$STAGE/nfqws2.conf" > "$normalized"; then
+        rm -f "$normalized"
+        err 'Не удалось исправить повторные ссылки на списки.'
+        return 1
+    fi
+    if ! sh -n "$normalized" || ! mv "$normalized" "$STAGE/nfqws2.conf"; then
+        rm -f "$normalized"
+        err 'Проверка исправленной конфигурации не пройдена.'
+        return 1
+    fi
+}
+
 extract_references() {
     # Expected form uses literal --blob/--hostlist/--ipset/--lua-init=@ paths.
     # Treat only fixed /opt/etc/nfqws2 entries, never execute config.
@@ -378,6 +432,7 @@ validate_and_prepare() {
     ensure_saved || { err 'Папка стратегии за пределами хранилища или повреждена.';return 1; }
     begin_stage || return 1
     prepare_candidate || return 1
+    normalize_list_refs || return 1
     extract_references
     prepare_missing_lua || return 1
     check_resources
