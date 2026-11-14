@@ -72,6 +72,10 @@ LOG_LEVEL=0
 LOG_DEBUG_PATH="@/opt/var/log/nfqws2-debug.log"
 CONFIG_VERSION=1
 CONF
+# Existing nfqws2 lists map to multiple Flowseal source files.
+for name in user.list exclude.list ipset_exclude.list; do
+    printf 'example.org\n' > "$base/lists/$name"
+done
 original=$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')
 make_strategy() {
     name=$1
@@ -83,8 +87,23 @@ make_strategy() {
     cat > "$saved/nfqws2.conf" <<EOF
 ISP_INTERFACE="eth3"
 NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua --lua-init=@/opt/etc/nfqws2/lua/zapret-antidpi.lua --blob=fake:@/opt/etc/nfqws2/blobs/$blob"
-NFQWS_ARGS="--filter-tcp=443 --payload=tls_client_hello --lua-desync=fake:blob=fake"
-NFQWS_ARGS_CUSTOM=""
+# Simulate a previously saved ALT12 (converter <= 0.3.0-rc4) with
+# repeated canonical list paths within three profiles.
+NFQWS_ARGS="--filter-tcp=443
+             --hostlist=/opt/etc/nfqws2/lists/user.list
+             --hostlist=/opt/etc/nfqws2/lists/user.list
+             --hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list
+             --hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list
+             --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list
+             --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list
+             --payload=tls_client_hello --lua-desync=fake:blob=fake"
+NFQWS_ARGS_CUSTOM="--filter-udp=443
+             --hostlist=/opt/etc/nfqws2/lists/user.list
+             --hostlist=/opt/etc/nfqws2/lists/user.list
+             --new
+             --filter-tcp=80
+             --hostlist=/opt/etc/nfqws2/lists/user.list
+             --hostlist=/opt/etc/nfqws2/lists/user.list"
 NFQWS_ARGS_QUIC=""
 NFQWS_ARGS_UDP=""
 NFQWS_EXTRA_ARGS=""
@@ -144,6 +163,12 @@ export KEENUTILS_FLOWSEAL_TEST_LUA_DIR="$work/official-lua"
 : > "$work/opt/init-error-while-running"
 sh "$deployer" apply "$a" > "$work/apply-a.log"
 rm -f "$work/opt/init-error-while-running"
+# Staged normalization must fix legacy saved ALT12 profiles, never
+# globally merge lists across --new boundaries or modify the saved template.
+test "$(grep -Fc -- '--hostlist=/opt/etc/nfqws2/lists/user.list' "$a/nfqws2.conf")" -eq 6
+test "$(grep -Fc -- '--hostlist=/opt/etc/nfqws2/lists/user.list' "$base/nfqws2.conf")" -eq 3
+test "$(grep -Fc -- '--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list' "$base/nfqws2.conf")" -eq 1
+test "$(grep -Fc -- '--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list' "$base/nfqws2.conf")" -eq 1
 grep -Fq 'проверяю состояние службы' "$work/apply-a.log"
 test -f "$work/opt/running"
 test -f "$base/lua/zapret-lib.lua"
