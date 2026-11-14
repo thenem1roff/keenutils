@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 CATALOG = Path("sources.conf")
-SCRIPT_KEYS = {"nfqws_menu", "keenkit", "hydra", "awg", "torrserver", "torr_watchdog"}
+SCRIPT_KEYS = {"nfqws_menu", "keenkit", "flashkeen", "hydra", "awg", "torrserver", "torr_watchdog"}
 FEEDS = {"nfqws_feed", "nfqws2_feed", "nfqws_web_feed"}
 
 def check(url):
