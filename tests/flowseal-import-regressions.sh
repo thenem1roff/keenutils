@@ -1,6 +1,6 @@
 #!/bin/sh
 # Offline release-tag import: no ZIP, no unzip, no Python, no router writes.
-set -eux
+set -eu
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 export KEENUTILS_FLOWSEAL_TEST_ONLY=1
@@ -88,7 +88,8 @@ list_choice() {
     else LIST_CHOICE=''
     fi
 }
-printf 'y\n' | prepare_apply_list_plan > "$work/plan.log"
+printf 'y\n' > "$work/plan-input"
+prepare_apply_list_plan < "$work/plan-input" > "$work/plan.log"
 test -s "$LIST_PLAN/plan.tsv"
 grep -Fq "$(printf 'merge\tlist-google.list')" "$LIST_PLAN/plan.tsv"
 cmp "$saved/lists/list-google.list" "$LIST_PLAN/lists/list-google.list"
