@@ -19,6 +19,7 @@ on:
       - torrserver
       - sources.conf
       - tests/sources-regression.sh
+      - tests/flashkeen-regressions.sh
       - tests/installer-regressions.sh
       - tests/uninstall-regressions.sh
       - tests/self-uninstall-regressions.sh
@@ -48,6 +49,7 @@ on:
       - torrserver
       - sources.conf
       - tests/sources-regression.sh
+      - tests/flashkeen-regressions.sh
       - .github/workflows/installer-check.yml
 jobs:
   shell:
@@ -173,6 +175,8 @@ jobs:
         run: sudo sh tests/torr-updater-regression.sh
       - name: Source catalog and original nfqws-menu delegation
         run: sudo sh tests/sources-regression.sh
+      - name: Flashkeen install, launch, cancellation and scoped removal
+        run: sh tests/flashkeen-regressions.sh
       - name: KeenKit upstream menu integration and return navigation
         run: sudo sh tests/keenkit-regressions.sh
       - name: Uninstall menu safety and regression tests
