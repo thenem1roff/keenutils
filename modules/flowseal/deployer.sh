@@ -494,12 +494,49 @@ rollback_files() {
         done < "$backup/created.tsv"
     fi
 }
+# Restore replaced list files BEFORE restarting the previous nfqws2 config.
+# If someone edited a list after deployment, do not overwrite their changes.
+check_replaced_lists() {
+    [ -f "$1/replaced.tsv" ] || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ref key; do
+        [ -n "$ref" ] || continue
+        case "$ref" in /opt/etc/nfqws2/lists/*) : ;; *) return 1 ;; esac
+        safe_file_path "$ref" || return 1
+        original=$(real_file "$ref") || return 1
+        check_plain_file "$original" &&
+            check_plain_file "$1/replaced/$key" &&
+            check_plain_file "$1/installed/$key" &&
+            cmp -s "$original" "$1/installed/$key" || {
+                err "Список $ref изменён после установки. Автоматический откат замены отменён."
+                return 1
+            }
+    done < "$1/replaced.tsv"
+}
+restore_replaced_lists() {
+    [ -f "$1/replaced.tsv" ] || return 0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ref key; do
+        [ -n "$ref" ] || continue
+        original=$(real_file "$ref") || return 1
+        temporary=$(mktemp "$(dirname "$original")/.flowseal-list-restore.XXXXXX") || return 1
+        if ! cp -p "$1/replaced/$key" "$temporary" ||
+            ! mv -f "$temporary" "$original"; then
+            rm -f "$temporary"
+            return 1
+        fi
+    done < "$1/replaced.tsv"
+}
+
 restore_snapshot() {
     backup=$1
     check_plain_file "$backup/nfqws2.conf" || return 1
     was=$(cat "$backup/was-running") || return 1
     case "$was" in yes|no) : ;; *) return 1 ;; esac
-    # Keep resource files until the old daemon has been restored.
+    # Restore overwritten list contents before daemon restarts.
+    check_replaced_lists "$backup" || return 1
+    restore_replaced_lists "$backup" || return 1
+    # Keep new resources until the old daemon has been restored.
     atomic_config "$backup/nfqws2.conf" || return 1
     if ! service_restore "$was"; then
         err 'Не удалось восстановить работу службы; резервная копия сохранена.'
@@ -569,12 +606,21 @@ copy_new_files() {
     while IFS= read -r ref; do
         [ -n "$ref" ] || continue
         resource_for "$ref" || return 1
-        [ -f "$DEST" ] && continue
-        check_plain_file "$SOURCE" || return 1
         key=$(printf '%s' "$ref" | tr '/' '_')
-        cp "$SOURCE" "$BACKUP/resources/$key" || return 1
-        # Write undo journal BEFORE moving the file into place.
-        printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/created.tsv" || return 1
+        if [ -f "$DEST" ]; then
+            # Never modify an existing file without an explicit list plan.
+            list_action "${ref##*/}" || continue
+            check_plain_file "$DEST" && check_plain_file "$SOURCE" || return 1
+            cmp -s "$SOURCE" "$DEST" && continue
+            cp -p "$DEST" "$BACKUP/replaced/$key" || return 1
+            cp "$SOURCE" "$BACKUP/installed/$key" || return 1
+            printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/replaced.tsv" || return 1
+        else
+            check_plain_file "$SOURCE" || return 1
+            cp "$SOURCE" "$BACKUP/resources/$key" || return 1
+            # Write undo journal BEFORE moving a new file into place.
+            printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/created.tsv" || return 1
+        fi
         new_tmp=$(mktemp "$(dirname "$DEST")/.flowseal-bin.XXXXXX") || return 1
         if ! cp "$SOURCE" "$new_tmp" || ! chmod 644 "$new_tmp" ||
             ! mv "$new_tmp" "$DEST"; then
@@ -587,9 +633,10 @@ do_apply() {
     validate_and_prepare || return 1
     acquire_lock || return 1
     BACKUP="$BACKUPS/$(date -u '+%Y%m%d-%H%M%S')-$$"
-    mkdir "$BACKUP" && mkdir "$BACKUP/resources" || return 1
+    mkdir "$BACKUP" && mkdir "$BACKUP/resources" "$BACKUP/replaced" "$BACKUP/installed" || return 1
     cp -p "$CONF" "$BACKUP/nfqws2.conf" || return 1
     : > "$BACKUP/created.tsv"
+    : > "$BACKUP/replaced.tsv"
     if service_running; then was=yes;else was=no;fi
     printf '%s\n' "$was" > "$BACKUP/was-running" || return 1
     if check_plain_file "$ACTIVE"; then
