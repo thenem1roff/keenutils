@@ -42,6 +42,37 @@ FLOWSEAL_OUTPUT="$tmp/output-games" FLOWSEAL_GAMES=yes FLOWSEAL_INTERFACE=eth3 \
 grep -Fq -- 'PROFILES_WRITTEN=4' "$tmp/output-games/stats.txt"
 grep -Fq -- '1024:65535' "$tmp/output-games/nfqws2.conf"
 sh -n "$tmp/output-games/nfqws2.conf"
+# Actual ALT12 maps list-general and list-general-user to the same user.list;
+# nfqws2 v1.0.7 rejects duplicates within a single --new profile.
+mkdir "$tmp/output-alt12"
+FLOWSEAL_OUTPUT="$tmp/output-alt12" FLOWSEAL_GAMES=no FLOWSEAL_INTERFACE=eth3 \
+    FLOWSEAL_ALT_LUA_HEX="$lua_hex" \
+    awk -f modules/flowseal/converter.awk \
+    "tests/fixtures/flowseal/general (ALT12).bat"
+sh -n "$tmp/output-alt12/nfqws2.conf"
+awk '
+    function clear_profile(k) { for (k in seen) delete seen[k] }
+    /^NFQWS_ARGS(_CUSTOM|_QUIC|_UDP|_IPSET)?=/ { active=1; clear_profile() }
+    {
+        if (!active) next
+        rest=$0
+        while (match(rest, /--new|--(hostlist(-exclude)?|ipset(-exclude)?)=\/opt\/etc\/nfqws2\/lists\/[A-Za-z0-9._-]+/)) {
+            key=substr(rest,RSTART,RLENGTH)
+            if (key=="--new") clear_profile()
+            else if (seen[key]++) duplicates++
+            rest=substr(rest,RSTART+RLENGTH)
+        }
+    }
+    END { exit (duplicates>0) }
+' "$tmp/output-alt12/nfqws2.conf" || {
+    echo 'ALT12 contains duplicate hostlist/ipset paths in a profile' >&2
+    exit 1
+}
+# Reuse in different profiles is valid and must NOT be deduplicated globally.
+test "$(grep -Fc -- '--hostlist=/opt/etc/nfqws2/lists/user.list' \
+    "$tmp/output-alt12/nfqws2.conf")" -eq 2
+grep -Fq 'merged-stock-list' "$tmp/output-alt12/diagnostics.tsv"
+
 # Unsupported hostfakesplit modifiers must produce failure, never silently pass.
 printf 'winws.exe --filter-tcp=443 --dpi-desync=hostfakesplit --dpi-desync-hostfakesplit-mod=unsafe=1\n' > "$tmp/unsafe.bat"
 mkdir "$tmp/unsafe-output"
