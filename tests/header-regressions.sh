@@ -81,7 +81,7 @@ grep -Fq ' 88. Удаление программ' /tmp/keenutils-header-offline.
 test "$(wc -l </tmp/keenutils-header-network-count)" = 3
 
 # A package removal must be reflected in the next header without another
-# remote check. The first detected app in menu 77 is nfqws2.
+# remote check. The first detected app in the uninstall menu is nfqws2.
 printf '88\n1\n1\ny\n\n0\n0\n00\n' |
   script -q -c 'KEENUTILS_DISABLE_UPDATE_CHECK=0 KEENUTILS_TEST_OFFLINE=1 NO_COLOR=1 sh /opt/bin/keenutils' \
     /dev/null >/tmp/keenutils-header-refresh.log

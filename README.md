@@ -42,14 +42,12 @@ utils
 
 | № | Действие |
 | :--: | --- |
-| **77** | **Flowseal → nfqws2** — конвертация, сохранение и переключение стратегий с резервным копированием и откатом. |
 | **88** | Удаление программ и очистка их остатков с подтверждением. |
 | **99** | Обновление KeenUtils. |
 | **00** | Выход. |
 
 В меню KeenUtils пустой **Enter** возвращает на предыдущий уровень или завершает работу. В меню сторонних программ действуют их собственные команды.
 
-**Важно:** применение конвертированной стратегии меняет конфигурацию nfqws2 и может повлиять на сеть. Перед использованием на основном роутере рекомендуется проверить работу на отдельной Entware. Подробности: [конвертер Flowseal и откат](docs/FLOWSEAL_DEV.md).
 
 ## Сторонние проекты
 
@@ -64,6 +62,4 @@ KeenUtils — независимый проект, не являющийся о�
 - [HydraRoute Neo](https://github.com/Ground-Zerro/HydraRoute/tree/main/Neo)
 - [AWG Manager](https://github.com/hoaxisr/awg-manager)
 - [TorrServer](https://github.com/YouROK/TorrServer)
-- [Flowseal](https://github.com/Flowseal/zapret-discord-youtube)
 
-Исходная реализация конвертации адаптирована из [Sxlenium/zapret-keenetic-converter](https://github.com/Sxlenium/zapret-keenetic-converter) по лицензии MIT; оригинальный текст лицензии сохранён в [modules/flowseal/LICENSE](modules/flowseal/LICENSE).
