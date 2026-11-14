@@ -165,7 +165,9 @@ resource_for() {
         /opt/etc/nfqws2/blobs/*)
             SOURCE="$SAVED/blobs/${ref##*/}" ;;
         /opt/etc/nfqws2/lua/*)
-            SOURCE='' ;;
+            SOURCE="$SAVED/lua/${ref##*/}"
+            [ -e "$SOURCE" ] || [ -L "$SOURCE" ] ||
+                SOURCE="$STAGE/lua/${ref##*/}" ;;
         *) return 1 ;;
     esac
     DEST=$(real_file "$ref") || return 1
@@ -176,6 +178,92 @@ resource_for() {
     esac
     safe_file_path "$ref"
 }
+# Stage missing stock Lua scripts from a release matched to the installed
+# nfqws2-keenetic package. Live paths are changed only after a backup.
+source_download() {
+    source_url=$1; source_out=$2
+    if command -v wget >/dev/null 2>&1 &&
+        wget -q -T 30 -O "$source_out" "$source_url" &&
+        [ -s "$source_out" ]; then return 0; fi
+    if command -v curl >/dev/null 2>&1 &&
+        curl -fLSs --connect-timeout 10 --max-time 75 \
+            -o "$source_out" "$source_url" && [ -s "$source_out" ]; then return 0; fi
+    return 1
+}
+prepare_missing_lua() {
+    missing_lua=''
+    for lua_name in zapret-lib.lua zapret-antidpi.lua; do
+        grep -Fxq "/opt/etc/nfqws2/lua/$lua_name" "$STAGE/references" || continue
+        [ -e "$SYSTEM/lua/$lua_name" ] && continue
+        [ -L "$SYSTEM/lua/$lua_name" ] && continue
+        [ -e "$SAVED/lua/$lua_name" ] && continue
+        [ -L "$SAVED/lua/$lua_name" ] && continue
+        missing_lua="$missing_lua $lua_name"
+    done
+    [ -n "$missing_lua" ] || return 0
+    if [ "$VERB" != apply ]; then
+        say 'Недостающие штатные Lua будут восстановлены из официального nfqws2-keenetic при применении.'
+        return 0
+    fi
+    mkdir "$STAGE/lua" || return 1
+    if [ "$TEST_MODE" = 1 ] && [ -n "${KEENUTILS_FLOWSEAL_TEST_LUA_DIR:-}" ]; then
+        lua_origin=fixture
+    else
+        command -v opkg >/dev/null 2>&1 || {
+            err 'Не найден opkg для определения версии nfqws2-keenetic.'; return 1;
+        }
+        pkg_version=$(opkg list-installed nfqws2-keenetic 2>/dev/null |
+            awk '$1=="nfqws2-keenetic" && $2=="-" {print $3;exit}')
+        pkg_version=${pkg_version%%-*}
+        printf '%s\n' "$pkg_version" |
+            grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$' || {
+                err 'Не удалось установить версию nfqws2-keenetic. Lua не изменены.'
+                return 1
+            }
+        release_json="$STAGE/nfqws2-release.json"
+        source_download \
+            "https://api.github.com/repos/nfqws/nfqws2-keenetic/releases/tags/v$pkg_version" \
+            "$release_json" || {
+                err "Не удалось получить официальный релиз nfqws2-keenetic v$pkg_version."
+                return 1
+            }
+        zapret_tag=$(grep -Eo \
+            'https://github.com/bol-van/zapret2/releases/tag/v[0-9]+[.][0-9]+[.][0-9]+' \
+            "$release_json" | head -n 1 | sed 's@.*/tag/@@')
+        printf '%s\n' "$zapret_tag" |
+            grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || {
+                err 'Официальный релиз не указал совместимую версию zapret2.'
+                return 1
+            }
+        lua_origin="https://raw.githubusercontent.com/bol-van/zapret2/$zapret_tag/lua"
+        say "Штатные Lua: источник zapret2 $zapret_tag (пакет $pkg_version)."
+    fi
+    for lua_name in $missing_lua; do
+        lua_out="$STAGE/lua/$lua_name"
+        if [ "$lua_origin" = fixture ]; then
+            check_plain_file "$KEENUTILS_FLOWSEAL_TEST_LUA_DIR/$lua_name" &&
+                cp "$KEENUTILS_FLOWSEAL_TEST_LUA_DIR/$lua_name" "$lua_out" || return 1
+        else
+            source_download "$lua_origin/$lua_name" "$lua_out" || {
+                err "Не удалось загрузить $lua_name. Системные файлы не изменены."
+                return 1
+            }
+        fi
+        [ -s "$lua_out" ] && [ ! -L "$lua_out" ] || return 1
+        case "$lua_name" in
+            zapret-lib.lua)
+                grep -Eq '^NFQWS2_COMPAT_VER_REQUIRED=[0-9]+' "$lua_out" || {
+                    err 'Неверное содержимое zapret-lib.lua.'; return 1;
+                } ;;
+            zapret-antidpi.lua)
+                grep -Fq 'NFQWS2 ANTIDPI LIBRARY' "$lua_out" || {
+                    err 'Неверное содержимое zapret-antidpi.lua.'; return 1;
+                } ;;
+        esac
+        say "Подготовлен штатный Lua: $lua_name"
+    done
+}
+
 check_resources() {
     MISSING=0
     NEED=0
@@ -227,6 +315,10 @@ rollback_files() {
         tab=$(printf '\t')
         while IFS="$tab" read -r ref key; do
             [ -n "$ref" ] || continue
+            # Stock Lua files belong to nfqws2-keenetic, not a Flowseal profile.
+            # Preserve a repaired missing library across strategy undo/rollback.
+            case "$ref" in /opt/etc/nfqws2/lua/zapret-lib.lua|/opt/etc/nfqws2/lua/zapret-antidpi.lua)
+                continue ;; esac
             path=$(real_file "$ref") || continue
             if [ ! -L "$path" ] && [ -f "$path" ] &&
                 check_plain_file "$backup/resources/$key" &&
@@ -287,6 +379,7 @@ validate_and_prepare() {
     begin_stage || return 1
     prepare_candidate || return 1
     extract_references
+    prepare_missing_lua || return 1
     check_resources
 }
 do_check() {
@@ -313,7 +406,7 @@ copy_new_files() {
         # Write undo journal BEFORE moving the file into place.
         printf '%s\t%s\n' "$ref" "$key" >> "$BACKUP/created.tsv" || return 1
         new_tmp=$(mktemp "$(dirname "$DEST")/.flowseal-bin.XXXXXX") || return 1
-        if ! cp "$SOURCE" "$new_tmp" || ! chmod 600 "$new_tmp" ||
+        if ! cp "$SOURCE" "$new_tmp" || ! chmod 644 "$new_tmp" ||
             ! mv "$new_tmp" "$DEST"; then
             rm -f "$new_tmp"
             return 1

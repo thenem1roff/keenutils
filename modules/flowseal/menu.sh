@@ -1,6 +1,6 @@
 #!/bin/sh
 # Independent Flowseal -> nfqws2 manager; POSIX sh, BusyBox awk and jq, no Python.
-# Development stage: saved drafts ONLY. Cannot deploy or touch running nfqws2.
+# Saved strategies can be deployed or rolled back with explicit confirmation.
 set -u
 umask 077
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -455,9 +455,7 @@ show_strategy() {
                 message '----------------------------------------'
                 message 'ПРИМЕНЕНИЕ СТРАТЕГИИ — изменит рабочую конфигурацию nfqws2.'
                 message 'Автоматически создаётся резервная копия и выполняется откат при ошибке.'
-                printf 'Для подтверждения введите APPLY: '
-                IFS= read -r confirmation || return 0
-                if [ "$confirmation" = APPLY ]; then
+                if ask_yes 'Применить эту стратегию к nfqws2?'; then
                     sh "$RUNTIME/deployer.sh" apply "$selected_dir" ||
                         error 'Применение не завершено; проверьте отчёт и состояние службы.'
                 else
@@ -542,9 +540,7 @@ deployment_menu() {
                 clear_menu_screen
                 message 'Восстановление конфигурации из последней резервной копии.'
                 message 'Работающая служба будет перезапущена, если это необходимо.'
-                printf 'Для подтверждения введите ROLLBACK: '
-                IFS= read -r confirmation || return 0
-                if [ "$confirmation" = ROLLBACK ]; then
+                if ask_yes 'Восстановить предыдущую конфигурацию?'; then
                     sh "$RUNTIME/deployer.sh" undo ||
                         error 'Откат не завершён. Проверьте резервные копии.'
                 else

@@ -82,7 +82,7 @@ make_strategy() {
     printf '{"name":"%s","version":"1.10.4","warnings":0}\n' "$name" > "$saved/info.json"
     cat > "$saved/nfqws2.conf" <<EOF
 ISP_INTERFACE="eth3"
-NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua --blob=fake:@/opt/etc/nfqws2/blobs/$blob"
+NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua --lua-init=@/opt/etc/nfqws2/lua/zapret-antidpi.lua --blob=fake:@/opt/etc/nfqws2/blobs/$blob"
 NFQWS_ARGS="--filter-tcp=443 --payload=tls_client_hello --lua-desync=fake:blob=fake"
 NFQWS_ARGS_CUSTOM=""
 NFQWS_ARGS_QUIC=""
@@ -117,12 +117,41 @@ grep -Fq 'Подготовлен для копирования' "$work/check.log
 sh "$deployer" preview "$a" > "$work/preview.log"
 grep -Fq 'guest-policy' "$work/preview.log"
 test ! -e "$work/opt/running"
+# Some devices are missing both libraries from the official nfqws2 package.
+# The read-only check must detect them without modifying system files.
+rm -f "$base/lua/zapret-lib.lua" "$base/lua/zapret-antidpi.lua"
+if sh "$deployer" check "$a" > "$work/missing-lua.log" 2>&1; then
+    echo 'Missing stock Lua was accepted without a recovery source' >&2
+    exit 1
+fi
+grep -Fq 'zapret-lib.lua' "$work/missing-lua.log"
+grep -Fq 'zapret-antidpi.lua' "$work/missing-lua.log"
+# A failed recovery does not touch the working configuration or copy files.
+mkdir -p "$work/no-lua-fixtures"
+export KEENUTILS_FLOWSEAL_TEST_LUA_DIR="$work/no-lua-fixtures"
+if sh "$deployer" apply "$a" > "$work/lua-failed.log" 2>&1; then
+    echo 'Missing recovery source was accepted' >&2; exit 1
+fi
+test "$original" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
+test ! -e "$base/lua/zapret-lib.lua"
+test ! -e "$base/lua/zapret-antidpi.lua"
+# Use local fixtures instead of the network, simulating two official files.
+mkdir -p "$work/official-lua"
+printf 'NFQWS2_COMPAT_VER_REQUIRED=6\n' > "$work/official-lua/zapret-lib.lua"
+printf '%s\n' '-- NFQWS2 ANTIDPI LIBRARY' > "$work/official-lua/zapret-antidpi.lua"
+export KEENUTILS_FLOWSEAL_TEST_LUA_DIR="$work/official-lua"
 # A nonzero init exit code does not mean the daemon failed to start.
 : > "$work/opt/init-error-while-running"
 sh "$deployer" apply "$a" > "$work/apply-a.log"
 rm -f "$work/opt/init-error-while-running"
 grep -Fq 'проверяю состояние службы' "$work/apply-a.log"
 test -f "$work/opt/running"
+test -f "$base/lua/zapret-lib.lua"
+test -f "$base/lua/zapret-antidpi.lua"
+test "$(stat -c %a "$base/lua/zapret-lib.lua")" = 644
+test "$(stat -c %a "$base/lua/zapret-antidpi.lua")" = 644
+test "$(stat -c %a "$base/blobs/flowseal-1.10.4-alt12-fake.bin")" = 644
+unset KEENUTILS_FLOWSEAL_TEST_LUA_DIR
 test -f "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
 grep -Fq 'ISP_INTERFACE="ppp0"' "$base/nfqws2.conf"
 grep -Fq 'POLICY_NAME="guest-policy"' "$base/nfqws2.conf"
@@ -170,6 +199,10 @@ cp "$work/last-known-good.conf" "$base/nfqws2.conf"
 sh "$deployer" undo > "$work/undo-original.log"
 test "$original" = "$(sha256sum "$base/nfqws2.conf" | awk '{print $1}')"
 test ! -e "$base/blobs/flowseal-1.10.4-alt12-fake.bin"
+# Recovered official package files are not specific to the strategy; undo
+# must not remove them if the previous nfqws2 config still needs them.
+test -f "$base/lua/zapret-lib.lua"
+test -f "$base/lua/zapret-antidpi.lua"
 test ! -e "$work/opt/running"
 # A zero init exit code without a running daemon must not count as rollback.
 sh "$deployer" apply "$a" > "$work/reapply-a.log"
