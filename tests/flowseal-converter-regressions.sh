@@ -50,6 +50,9 @@ FLOWSEAL_OUTPUT="$tmp/output-alt12" FLOWSEAL_GAMES=no FLOWSEAL_INTERFACE=eth3 \
     awk -f modules/flowseal/converter.awk \
     "tests/fixtures/flowseal/general (ALT12).bat"
 sh -n "$tmp/output-alt12/nfqws2.conf"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/list-google.list' "$tmp/output-alt12/nfqws2.conf"
+grep -Fq "$(printf 'list-google.txt\tlist-google.list')" "$tmp/output-alt12/lists.manifest"
+! grep -Fq -- 'flowseal-list-google.list' "$tmp/output-alt12/nfqws2.conf"
 awk '
     function clear_profile(k) { for (k in seen) delete seen[k] }
     /^NFQWS_ARGS(_CUSTOM|_QUIC|_UDP|_IPSET)?=/ { active=1; clear_profile() }
