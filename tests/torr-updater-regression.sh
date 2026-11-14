@@ -34,20 +34,37 @@ cat >/opt/bin/curl <<'MOCK_CURL'
 #!/bin/sh
 case "$*" in
     *api.github.com/repos/YouROK/TorrServer/releases/latest*)
-        printf '{\n  "tag_name": "MatriX.147.2"\n}\n' ;;
-    *releases/download/MatriX.147.2/TorrServer-linux-arm64*)
+        latest=$(cat /tmp/keenutils-ts-latest)
+        case "$latest" in
+            MatriX.147.2) published='2026-10-29T03:19:05Z' ;;
+            Silo.2) published='2026-11-14T14:08:30Z' ;;
+            Nova.1) published='2026-11-15T14:08:30Z' ;;
+            *) exit 2 ;;
+        esac
+        printf '{\n  "tag_name": "%s",\n  "published_at": "%s"\n}\n' "$latest" "$published" ;;
+    *api.github.com/repos/YouROK/TorrServer/releases/tags/*)
+        case "$*" in
+            *releases/tags/MatriX.141*) published='2026-08-01T00:00:00Z' ;;
+            *releases/tags/MatriX.150*) published='2026-11-06T17:56:32Z' ;;
+            *releases/tags/Silo.2*) published='2026-11-14T14:08:30Z' ;;
+            *releases/tags/Silo.3*) published='2026-11-15T12:00:00Z' ;;
+            *) exit 2 ;;
+        esac
+        printf '{\n  "published_at": "%s"\n}\n' "$published" ;;
+    *releases/download/*/TorrServer-linux-arm64*)
         dest=''
+        tag=''
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 -o) shift; dest="$1" ;;
+                */releases/download/*/TorrServer-linux-arm64)
+                    tag=${1%/TorrServer-linux-arm64}
+                    tag=${tag##*/} ;;
             esac
             shift
         done
-        [ -n "$dest" ] || exit 2
-        cat >"$dest" <<'NEW_BIN'
-#!/bin/sh
-echo 'github version MatriX.147.2'
-NEW_BIN
+        [ -n "$dest" ] && [ -n "$tag" ] || exit 2
+        printf '#!/bin/sh\necho "github version %s"\n' "$tag" >"$dest"
         ;;
     *127.0.0.1:8090/echo*)
         mode=$(cat /tmp/keenutils-ts-mode)
@@ -101,18 +118,17 @@ cleanup() {
     rm -f /opt/bin/uname /opt/bin/date /opt/bin/sleep /opt/bin/pgrep \
         /opt/bin/curl /opt/sbin/torrserver /opt/sbin/torrserver.backup \
         /opt/etc/init.d/S90torrserver /tmp/keenutils-ts-running \
-        /tmp/keenutils-ts-mode
+        /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest
 }
 trap cleanup EXIT
 
 reset_binary() {
-    cat >/opt/sbin/torrserver <<'OLD_BIN'
-#!/bin/sh
-echo 'github version MatriX.141'
-OLD_BIN
+    tag=${1:-MatriX.141}
+    printf '#!/bin/sh\necho "github version %s"\n' "$tag" >/opt/sbin/torrserver
     chmod 755 /opt/sbin/torrserver
     rm -f /tmp/keenutils-ts-running
 }
+printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
 
 # Clean install: service was never started. An unsuccessful init stop must
 # not abort the updater, and the new version must start successfully.
@@ -177,4 +193,43 @@ sh ./torrserver >/tmp/keenutils-ts-auth.log 2>&1
 grep -Fq 'API: HTTP 401' /tmp/keenutils-ts-auth.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.147.2'
 
-echo 'TorrServer updater: cold start, stop-code mismatch, blocked swap, rollback, API and auth tests passed.'
+
+# Upstream renamed the series: MatriX.150 -> Silo.2. Publication dates,
+# not the numeric suffix alone, determine chronology across series.
+reset_binary MatriX.150
+printf 'Silo.2\n' >/tmp/keenutils-ts-latest
+echo normal >/tmp/keenutils-ts-mode
+sh ./torrserver >/tmp/keenutils-ts-silo.log 2>&1
+grep -Fq 'Обновление: MatriX.150 -> Silo.2' /tmp/keenutils-ts-silo.log
+grep -Fq 'TorrServer успешно обновлён!' /tmp/keenutils-ts-silo.log
+/opt/sbin/torrserver --version | grep -Fq 'Silo.2'
+/opt/sbin/torrserver.backup --version | grep -Fq 'MatriX.150'
+
+# The current Silo release must be detected as already installed.
+reset_binary Silo.2
+sh ./torrserver >/tmp/keenutils-ts-silo-current.log 2>&1
+grep -Fq 'TorrServer уже обновлён.' /tmp/keenutils-ts-silo-current.log
+/opt/sbin/torrserver --version | grep -Fq 'Silo.2'
+
+# Never downgrade across series.
+reset_binary Silo.2
+printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
+sh ./torrserver >/tmp/keenutils-ts-silo-downgrade.log 2>&1
+grep -Fq 'Установленная версия не старее релиза.' /tmp/keenutils-ts-silo-downgrade.log
+/opt/sbin/torrserver --version | grep -Fq 'Silo.2'
+
+# Never downgrade within one release series.
+reset_binary Silo.3
+printf 'Silo.2\n' >/tmp/keenutils-ts-latest
+sh ./torrserver >/tmp/keenutils-ts-silo3.log 2>&1
+grep -Fq 'Установленная версия не старее релиза.' /tmp/keenutils-ts-silo3.log
+/opt/sbin/torrserver --version | grep -Fq 'Silo.3'
+
+# Future series names are supported without adding hardcoded names.
+reset_binary Silo.2
+printf 'Nova.1\n' >/tmp/keenutils-ts-latest
+sh ./torrserver >/tmp/keenutils-ts-nova.log 2>&1
+grep -Fq 'Обновление: Silo.2 -> Nova.1' /tmp/keenutils-ts-nova.log
+/opt/sbin/torrserver --version | grep -Fq 'Nova.1'
+
+echo 'TorrServer updater: cold start, stop-code mismatch, blocked swap, rollback, API, auth and renamed release tests passed.'
