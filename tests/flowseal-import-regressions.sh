@@ -1,6 +1,6 @@
 #!/bin/sh
 # Offline release-tag import: no ZIP, no unzip, no Python, no router writes.
-set -eu
+set -eux
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 export KEENUTILS_FLOWSEAL_TEST_ONLY=1
