@@ -34,6 +34,21 @@ cat >/opt/bin/curl <<'MOCK_CURL'
 #!/bin/sh
 case "$*" in
     *api.github.com/repos/YouROK/TorrServer/releases?per_page=30*)
+        # The updater writes API responses to a file so retries cannot
+        # concatenate partial JSON responses on stdout.
+        dest=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) shift; dest="$1" ;;
+            esac
+            shift
+        done
+        [ -n "$dest" ] || { echo 'Missing API output file' >&2; exit 2; }
+        exec 1>"$dest"
+        if [ -f /tmp/keenutils-ts-github-fail ]; then
+            printf 'partial JSON from timed-out API response\n'
+            exit 28
+        fi
         # The first release is the explicitly unfinished Silo rewrite.
         # The updater must select the newest production MatriX release.
         stable=$(cat /tmp/keenutils-ts-latest)
@@ -111,7 +126,8 @@ cleanup() {
     rm -f /opt/bin/uname /opt/bin/date /opt/bin/sleep /opt/bin/pgrep \
         /opt/bin/curl /opt/sbin/torrserver /opt/sbin/torrserver.backup \
         /opt/etc/init.d/S90torrserver /tmp/keenutils-ts-running \
-        /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest
+        /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest \
+        /tmp/keenutils-ts-github-fail
 }
 trap cleanup EXIT
 
@@ -166,6 +182,20 @@ fi
 grep -Fq 'Восстановление предыдущей версии' /tmp/keenutils-ts-startfail.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
 [ -f /tmp/keenutils-ts-running ]
+
+# GitHub returns an incomplete response and fails. The updater must not
+# parse partial JSON or touch the installed binary.
+reset_binary MatriX.141
+touch /tmp/keenutils-ts-running
+touch /tmp/keenutils-ts-github-fail
+if sh ./torrserver >/tmp/keenutils-ts-github-fail.log 2>&1; then
+    echo 'Partial GitHub API response incorrectly accepted' >&2
+    exit 1
+fi
+grep -Fq 'GitHub API недоступен' /tmp/keenutils-ts-github-fail.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
+[ -f /tmp/keenutils-ts-running ]
+rm -f /tmp/keenutils-ts-github-fail
 
 # API remains unavailable: restore the original version and its running state.
 reset_binary
