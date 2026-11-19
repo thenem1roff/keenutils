@@ -60,6 +60,8 @@ case "$*" in
             *) exit 2 ;;
         esac ;;
     *releases/download/*/TorrServer-linux-arm64*)
+        # Keep the original arguments to ensure curl resume is enabled.
+        args="$*"
         dest=''
         tag=''
         while [ "$#" -gt 0 ]; do
@@ -72,7 +74,24 @@ case "$*" in
             shift
         done
         [ -n "$dest" ] && [ -n "$tag" ] || exit 2
-        printf '#!/bin/sh\necho "github version %s"\n' "$tag" >"$dest"
+        case "$args" in
+            *--continue-at\ -*) : ;;
+            *) echo 'Missing curl resume option' >&2; exit 90 ;;
+        esac
+        if [ -f /tmp/keenutils-ts-partial-once ]; then
+            if [ -f /tmp/keenutils-ts-transfer-started ]; then
+                [ "$(cat "$dest")" = '#!/bin/sh' ] ||
+                    { echo 'Partial binary was not retained for resume' >&2; exit 91; }
+                printf '\necho "github version %s"\n' "$tag" >>"$dest"
+                rm -f /tmp/keenutils-ts-partial-once /tmp/keenutils-ts-transfer-started
+            else
+                printf '#!/bin/sh' >"$dest"
+                touch /tmp/keenutils-ts-transfer-started
+                exit 28
+            fi
+        else
+            printf '#!/bin/sh\necho "github version %s"\n' "$tag" >"$dest"
+        fi
         ;;
     *127.0.0.1:8090/echo*)
         mode=$(cat /tmp/keenutils-ts-mode)
@@ -127,7 +146,8 @@ cleanup() {
         /opt/bin/curl /opt/sbin/torrserver /opt/sbin/torrserver.backup \
         /opt/etc/init.d/S90torrserver /tmp/keenutils-ts-running \
         /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest \
-        /tmp/keenutils-ts-github-fail
+        /tmp/keenutils-ts-github-fail \
+        /tmp/keenutils-ts-partial-once /tmp/keenutils-ts-transfer-started
 }
 trap cleanup EXIT
 
@@ -169,6 +189,18 @@ fi
 grep -Fq 'Бинарник НЕ заменён' /tmp/keenutils-ts-stuck.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
 [ -f /tmp/keenutils-ts-running ]
+
+# An interrupted large download must resume from existing bytes, not
+# discard them and begin again.
+reset_binary
+touch /tmp/keenutils-ts-running
+echo normal >/tmp/keenutils-ts-mode
+touch /tmp/keenutils-ts-partial-once
+sh ./torrserver >/tmp/keenutils-ts-resume.log 2>&1
+grep -Fq 'Повторная попытка с продолжением загрузки' /tmp/keenutils-ts-resume.log
+grep -Fq 'TorrServer успешно обновлён!' /tmp/keenutils-ts-resume.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.147.2'
+[ ! -f /tmp/keenutils-ts-transfer-started ]
 
 # New binary replacement succeeds, but start fails. Restore original
 # atomically and bring the originally running service back up.
