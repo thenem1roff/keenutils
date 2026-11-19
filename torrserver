@@ -177,10 +177,24 @@ TMP=$(mktemp /opt/sbin/.torrserver.XXXXXX) ||
 URL="https://github.com/YouROK/TorrServer/releases/download/$LATEST/TorrServer-linux-arm64"
 
 echo "Скачивание бинарника..."
-
-curl -fL --retry 3 --connect-timeout 15 \
-    --max-time 300 -o "$TMP" "$URL" ||
-    fail "Не удалось скачать бинарник"
+# Slow GitHub release asset downloads can exceed five minutes. Retry each
+# failed transfer as a new curl invocation with HTTP range resume, preserving
+# already written bytes. curl's built-in --retry resets the output file.
+DOWNLOAD_ATTEMPT=1
+DOWNLOAD_ATTEMPTS=4
+while :; do
+    if curl -fL --connect-timeout 15 --max-time 1200 \
+        --continue-at - -o "$TMP" "$URL"; then
+        break
+    fi
+    if [ "$DOWNLOAD_ATTEMPT" -ge "$DOWNLOAD_ATTEMPTS" ]; then
+        fail "Не удалось скачать бинарник после $DOWNLOAD_ATTEMPTS попыток"
+    fi
+    echo "Загрузка прервалась, сохранено $(wc -c < "$TMP") байт."
+    echo "Повторная попытка с продолжением загрузки..."
+    DOWNLOAD_ATTEMPT=$((DOWNLOAD_ATTEMPT + 1))
+    sleep 2
+done
 
 [ -s "$TMP" ] || fail "Скачанный файл пуст"
 
