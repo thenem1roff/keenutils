@@ -752,8 +752,9 @@ get_torr_settings() {
                (.CacheSize|type=="number") and
                (.ReaderReadAHead|type=="number") and
                (.PreloadCache|type=="number") and
-               (.DownloadRateLimit|type=="number")' >/dev/null ||
-        { err 'API не вернул ожидаемые поля настроек кеша и скорости.'; return 1; }
+               (.DownloadRateLimit|type=="number") and
+               (.ConnectionsLimit|type=="number")' >/dev/null ||
+        { err 'API не вернул ожидаемые поля настроек кеша, скорости и соединений.'; return 1; }
 }
 set_torr_settings() {
     req=$(printf '%s' "$1" | jq -c '{action:"set",sets:.}') || return 1
@@ -797,26 +798,32 @@ configure_torr_cache_inner() {
     old_ahead=$(printf '%s' "$existing" | jq -r '.ReaderReadAHead') || return 1
     old_preload=$(printf '%s' "$existing" | jq -r '.PreloadCache') || return 1
     old_rate=$(printf '%s' "$existing" | jq -r '.DownloadRateLimit') || return 1
+    old_connections=$(printf '%s' "$existing" | jq -r '.ConnectionsLimit') || return 1
     say "Сейчас: $old_path (UseDisk=$old_disk)"
-    say "Кеш: $old_size байт; впереди: $old_ahead%; предзагрузка: $old_preload%; загрузка: $old_rate КБ/с"
+    say "Кеш: $old_size байт; впереди: $old_ahead%; предзагрузка: $old_preload%; загрузка: $old_rate КиБ/с; соединений на торрент: $old_connections"
     find_entware_disk || return 1
     CACHE_DIR="$DISK_ROOT/tscashe"
     say "Предлагается: $CACHE_DIR"
     say 'Кеш: 1024 МиБ (1073741824 байт); впереди: 95%; предзагрузка: 5% (51 МиБ)'
-    say 'Ограничение скорости загрузки: 6250 КБ/с (6400000 байт/с)'
+    say 'Ограничение скорости загрузки: 6250 КиБ/с (6400000 байт/с); соединений на торрент: 20'
     # Check all requested values, not just the cache path. An already
     # configured disk cache can still need the size/speed preset.
     if printf '%s' "$existing" |
         jq -e --arg p "$CACHE_DIR" '
           .TorrentsSavePath == $p and .UseDisk == true and
           .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
-          .PreloadCache == 5 and .DownloadRateLimit == 6250
+          .PreloadCache == 5 and .DownloadRateLimit == 6250 and
+          .ConnectionsLimit == 20
         ' >/dev/null; then
-        say 'Настройки кеша и ограничения скорости уже совпадают. Изменений не требуется.'
+        say 'Настройки кеша, скорости и соединений уже совпадают. Изменений не требуется.'
         return 0
     fi
     say 'При сохранении TorrServer переподключает торрент-сессии.'
-    ask_yes 'Применить настройки кеша и ограничения скорости?' yes || return 0
+    # Wizard asks for the complete preset once. The independent menu item 4
+    # retains its usual confirmation before saving.
+    if [ "${1:-}" != confirmed ]; then
+        ask_yes 'Применить настройки кеша, скорости и соединений?' yes || return 0
+    fi
     mkdir -p "$CACHE_DIR" || return 1
     probe="$CACHE_DIR/.keenutils-check.$$"
     if ! ( : > "$probe" ); then
@@ -837,7 +844,8 @@ configure_torr_cache_inner() {
         jq -c --arg p "$CACHE_DIR" '
           .TorrentsSavePath=$p | .UseDisk=true |
           .CacheSize=1073741824 | .ReaderReadAHead=95 |
-          .PreloadCache=5 | .DownloadRateLimit=6250
+          .PreloadCache=5 | .DownloadRateLimit=6250 |
+          .ConnectionsLimit=20
         ') || return 1
     if ! set_torr_settings "$updated"; then
         err "Сохранение не подтверждено API. Копия: $backup"
@@ -850,10 +858,11 @@ configure_torr_cache_inner() {
                 jq -e --arg p "$CACHE_DIR" '
                   .TorrentsSavePath == $p and .UseDisk == true and
                   .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
-                  .PreloadCache == 5 and .DownloadRateLimit == 6250
+                  .PreloadCache == 5 and .DownloadRateLimit == 6250 and
+                  .ConnectionsLimit == 20
                 ' >/dev/null; then
                 say "УСПЕХ: UseDisk=true, путь кеша: $CACHE_DIR"
-                say 'Кеш: 1024 МиБ; впереди: 95%; предзагрузка: 5%; скорость загрузки: 6250 КБ/с.'
+                say 'Кеш: 1024 МиБ; впереди: 95%; предзагрузка: 5%; скорость: 6250 КиБ/с; соединений: 20.'
                 say 'Все изменения подтверждены повторным чтением из TorrServer.'
                 return 0
             fi
@@ -862,7 +871,7 @@ configure_torr_cache_inner() {
         sleep 2
     done
     err 'TorrServer не подтвердил новые параметры (возможен режим read-only).'
-    err "Требуемые: путь $CACHE_DIR, кеш 1024 МиБ, впереди 95%, предзагрузка 5%, скорость 6250 КБ/с."
+    err "Требуемые: путь $CACHE_DIR, кеш 1024 МиБ, впереди 95%, предзагрузка 5%, скорость 6250 КиБ/с, соединений 20."
     err "Резервная копия: $backup"
     return 1
 }
@@ -871,7 +880,7 @@ configure_torr_cache() {
     ensure_mktemp || return 1
     TORR_AUTHFILE=''
     TORR_RESPONSE_FILE=$(mktemp /tmp/.keenutils-settings.XXXXXX) || return 1
-    configure_torr_cache_inner
+    configure_torr_cache_inner "${1:-}"
     res=$?
     torr_api_cleanup
     return "$res"
@@ -946,7 +955,41 @@ setup_torr_cache() {
     [ -x /opt/sbin/torrserver ] ||
         { err 'TorrServer не установлен. Сначала выберите пункт 1.'; return 1; }
     ensure_torr_running || return 1
-    configure_torr_cache
+    configure_torr_cache "${1:-}"
+}
+
+# Menu item 1 installs/starts the daemon, then offers three optional steps.
+# Items 2-4 remain independent commands in the same submenu.
+install_torrserver_wizard() {
+    install_torrserver || return 1
+    wizard_failed=0
+    say ''
+    if ask_yes 'Обновить TorrServer до последней поддерживаемой версии MatriX?'; then
+        if ! update_torrserver; then
+            err 'Обновление не завершено. Повторить можно через пункт 2.'
+            wizard_failed=1
+        fi
+    fi
+    say ''
+    if ask_yes 'Установить или проверить watchdog TorrServer?'; then
+        if ! install_watchdog; then
+            err 'Watchdog не настроен. Повторить можно через пункт 3.'
+            wizard_failed=1
+        fi
+    fi
+    say ''
+    if ask_yes 'Настроить дисковый кеш (1024 МиБ, 95/5%, 6250 КиБ/с, 20 соединений)?'; then
+        if ! setup_torr_cache confirmed; then
+            err 'Настройки кеша и ограничений не подтверждены. Повторите через пункт 4.'
+            wizard_failed=1
+        fi
+    fi
+    if [ "$wizard_failed" -eq 0 ]; then
+        say 'Настройка TorrServer завершена.'
+    else
+        say 'TorrServer установлен; отдельные дополнительные действия завершились с ошибками.'
+    fi
+    [ "$wizard_failed" -eq 0 ]
 }
 
 # Nested menu: each operation is independent. 0 returns directly to main.
@@ -966,7 +1009,7 @@ torrserver_menu() {
         printf 'Выберите действие: '
         IFS= read -r torr_choice || return 0
         case "$torr_choice" in
-            1|01) install_torrserver ;;
+            1|01) install_torrserver_wizard ;;
             2|02) update_torrserver ;;
             3|03) install_watchdog ;;
             4|04) setup_torr_cache ;;
