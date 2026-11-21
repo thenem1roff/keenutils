@@ -36,7 +36,7 @@ fetch_and_run() {
     return 0
 }
 configure_torr_cache() {
-    printf 'cache\n' >>/tmp/keenutils-torr-test-log
+    printf 'cache%s\n' "${1:+:$1}" >>/tmp/keenutils-torr-test-log
 }
 watchdog_complete() { test -f /tmp/keenutils-torr-test-watchdog; }
 
@@ -162,4 +162,59 @@ install_watchdog >/tmp/keenutils-torr-watchdog.log
 grep -Fq 'уже установлен' /tmp/keenutils-torr-watchdog.log
 [ -f /tmp/keenutils-torr-test-running ]
 
-echo 'TorrServer install/start: fresh, running, repair, failed start, update, cache and watchdog OK.'
+# 11. Menu item 1 is now a setup wizard: defaults (Enter) perform all
+# optional steps in order, with no second cache confirmation.
+: >/tmp/keenutils-torr-test-log
+printf '\n\n\n' >/tmp/keenutils-torr-wizard-answers
+ask_yes() {
+    printf 'prompt:%s\n' "$1" >>/tmp/keenutils-torr-test-log
+    IFS= read -r response || return 1
+    case "$response" in ''|y|Y) return 0 ;; n|N) return 1 ;; *) return 1 ;; esac
+}
+install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-wizard.log
+test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
+grep -Fxq update /tmp/keenutils-torr-test-log
+grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
+grep -Fq 'watchdog уже установлен' /tmp/keenutils-torr-wizard.log
+grep -Fq 'Настройка TorrServer завершена' /tmp/keenutils-torr-wizard.log
+# Independent menu action 4 still asks for its own confirmation.
+: >/tmp/keenutils-torr-test-log
+setup_torr_cache
+grep -Fxq cache /tmp/keenutils-torr-test-log
+
+# 12. Declining every optional step must leave the installed server running.
+: >/tmp/keenutils-torr-test-log
+printf 'n\nn\nn\n' >/tmp/keenutils-torr-wizard-answers
+install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-wizard-decline.log
+test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
+! grep -Fxq update /tmp/keenutils-torr-test-log
+! grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
+test -f /tmp/keenutils-torr-test-running
+
+# 13. An updater failure is reported and does not suppress later questions.
+: >/tmp/keenutils-torr-test-log
+touch /tmp/keenutils-torr-test-updater-fails
+printf '\n\n\n' >/tmp/keenutils-torr-wizard-answers
+if install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-wizard-update-fail.log 2>&1; then
+    echo 'Wizard ignored failed update' >&2; exit 1
+fi
+test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
+grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
+grep -Fq 'Обновление не завершено' /tmp/keenutils-torr-wizard-update-fail.log
+rm -f /tmp/keenutils-torr-test-updater-fails
+
+# 14. If installation/start fails, the wizard must not request anything else.
+reset
+touch /tmp/keenutils-torr-test-pkg
+printf '#!/bin/sh\nexit 0\n' >/opt/sbin/torrserver
+chmod 755 /opt/sbin/torrserver
+printf 'fail\n' >/tmp/keenutils-torr-test-mode
+printf '\n\n\n' >/tmp/keenutils-torr-wizard-answers
+if install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-wizard-start-fail.log 2>&1; then
+    echo 'Wizard continued after failed service start' >&2; exit 1
+fi
+! grep -q '^prompt:' /tmp/keenutils-torr-test-log
+! grep -Fxq update /tmp/keenutils-torr-test-log
+! grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
+
+echo 'TorrServer install/start wizard: install, update, watchdog, cache, skip, errors and 20-connection option OK.'
