@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 HTTPServer(("127.0.0.1", 18090), Handler).serve_forever()
 PY
-printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":90,"PreloadCache":50,"DownloadRateLimit":0,"UploadRateLimit":200,"FriendlyName":"test"}\n' > /tmp/keenutils-cache-state.json
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":90,"PreloadCache":50,"DownloadRateLimit":0,"ConnectionsLimit":25,"UploadRateLimit":200,"FriendlyName":"test"}\n' > /tmp/keenutils-cache-state.json
 python3 /tmp/keenutils-cache-api.py >/tmp/keenutils-cache-api.log 2>&1 &
 api_pid=$!
 trap 'kill "$api_pid" 2>/dev/null || :; torr_api_cleanup; rm -rf "$MOCK_DISK"' EXIT
@@ -93,10 +93,11 @@ jq -e '
   .ReaderReadAHead == 95 and
   .PreloadCache == 5 and
   .DownloadRateLimit == 6250 and
+  .ConnectionsLimit == 20 and
   .UploadRateLimit == 200 and .FriendlyName == "test"
 ' /tmp/keenutils-cache-state.json >/dev/null
 test -d "$MOCK_DISK/tscashe"
-# A repeated run is a no-op when path, size, ratios and limit match.
+# A repeated run is a no-op when path, size, ratios, speed and connections match.
 cp /tmp/keenutils-cache-state.json /tmp/keenutils-cache-before.json
 configure_torr_cache_inner >/tmp/keenutils-cache-noop.log
 grep -Fq 'уже совпадают' /tmp/keenutils-cache-noop.log
@@ -106,14 +107,19 @@ cmp -s /tmp/keenutils-cache-before.json /tmp/keenutils-cache-state.json
 jq '.DownloadRateLimit=0' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-rate-mismatch.json
 mv /tmp/keenutils-cache-rate-mismatch.json /tmp/keenutils-cache-state.json
 configure_torr_cache_inner
-jq -e '.DownloadRateLimit==6250 and .CacheSize==1073741824 and .PreloadCache==5' /tmp/keenutils-cache-state.json >/dev/null
+jq -e '.DownloadRateLimit==6250 and .CacheSize==1073741824 and .PreloadCache==5 and .ConnectionsLimit==20' /tmp/keenutils-cache-state.json >/dev/null
 # Similarly, an existing disk cache with smaller size must be updated.
 jq '.CacheSize=67108864' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-size-mismatch.json
 mv /tmp/keenutils-cache-size-mismatch.json /tmp/keenutils-cache-state.json
 configure_torr_cache_inner
 jq -e '.CacheSize==1073741824 and .ReaderReadAHead==95' /tmp/keenutils-cache-state.json >/dev/null
+# Likewise, correcting connections alone must not be skipped as a no-op.
+jq '.ConnectionsLimit=25' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-peers-mismatch.json
+mv /tmp/keenutils-cache-peers-mismatch.json /tmp/keenutils-cache-state.json
+configure_torr_cache_inner
+jq -e '.ConnectionsLimit==20 and .DownloadRateLimit==6250' /tmp/keenutils-cache-state.json >/dev/null
 # HTTP 200 is NOT sufficient: read-only API must be detected as a failure.
-printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":95,"PreloadCache":50,"DownloadRateLimit":0}\n' > /tmp/keenutils-cache-state.json
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":95,"PreloadCache":50,"DownloadRateLimit":0,"ConnectionsLimit":25}\n' > /tmp/keenutils-cache-state.json
 touch /tmp/keenutils-cache-readonly
 if configure_torr_cache_inner; then
     echo 'Read-only TorrServer incorrectly reported cache configuration success' >&2
@@ -128,4 +134,12 @@ if configure_torr_cache_inner; then
     exit 1
 fi
 jq -e 'has("CacheSize") | not' /tmp/keenutils-cache-state.json >/dev/null
-echo 'TorrServer API: authentication, 1024 MiB/95%/5%/6250 KiB/s, preservation, no-op, read-only and validation passed.'
+# Missing ConnectionsLimit is an incompatible/incomplete API payload:
+# replacing all settings must be blocked.
+printf '{"UseDisk":false,"TorrentsSavePath":"","CacheSize":67108864,"ReaderReadAHead":90,"PreloadCache":50,"DownloadRateLimit":0}\n' > /tmp/keenutils-cache-state.json
+if configure_torr_cache_inner; then
+    echo 'Missing peer connection limit was accepted' >&2
+    exit 1
+fi
+jq -e 'has("ConnectionsLimit") | not' /tmp/keenutils-cache-state.json >/dev/null
+echo 'TorrServer API: authentication, 1024 MiB/95%/5%/6250 KiB/s/20 connections, preservation, no-op, read-only and validation passed.'
