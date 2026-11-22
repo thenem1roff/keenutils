@@ -91,7 +91,7 @@ jq -e '
   .TorrentsSavePath == "/tmp/mnt/keenutils-cache-test/tscashe" and
   .CacheSize == 1073741824 and
   .ReaderReadAHead == 95 and
-  .PreloadCache == 5 and
+  .PreloadCache == 25 and
   .DownloadRateLimit == 6250 and
   .ConnectionsLimit == 20 and
   .UploadRateLimit == 200 and .FriendlyName == "test"
@@ -107,12 +107,17 @@ cmp -s /tmp/keenutils-cache-before.json /tmp/keenutils-cache-state.json
 jq '.DownloadRateLimit=0' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-rate-mismatch.json
 mv /tmp/keenutils-cache-rate-mismatch.json /tmp/keenutils-cache-state.json
 configure_torr_cache_inner
-jq -e '.DownloadRateLimit==6250 and .CacheSize==1073741824 and .PreloadCache==5 and .ConnectionsLimit==20' /tmp/keenutils-cache-state.json >/dev/null
+jq -e '.DownloadRateLimit==6250 and .CacheSize==1073741824 and .PreloadCache==25 and .ConnectionsLimit==20' /tmp/keenutils-cache-state.json >/dev/null
 # Similarly, an existing disk cache with smaller size must be updated.
 jq '.CacheSize=67108864' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-size-mismatch.json
 mv /tmp/keenutils-cache-size-mismatch.json /tmp/keenutils-cache-state.json
 configure_torr_cache_inner
 jq -e '.CacheSize==1073741824 and .ReaderReadAHead==95' /tmp/keenutils-cache-state.json >/dev/null
+# A preset with only the former 5% preload must also be updated.
+jq '.PreloadCache=5' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-preload-mismatch.json
+mv /tmp/keenutils-cache-preload-mismatch.json /tmp/keenutils-cache-state.json
+configure_torr_cache_inner
+jq -e '.PreloadCache==25 and .CacheSize==1073741824' /tmp/keenutils-cache-state.json >/dev/null
 # Likewise, correcting connections alone must not be skipped as a no-op.
 jq '.ConnectionsLimit=25' /tmp/keenutils-cache-state.json >/tmp/keenutils-cache-peers-mismatch.json
 mv /tmp/keenutils-cache-peers-mismatch.json /tmp/keenutils-cache-state.json
@@ -142,4 +147,4 @@ if configure_torr_cache_inner; then
     exit 1
 fi
 jq -e 'has("ConnectionsLimit") | not' /tmp/keenutils-cache-state.json >/dev/null
-echo 'TorrServer API: authentication, 1024 MiB/95%/5%/6250 KiB/s/20 connections, preservation, no-op, read-only and validation passed.'
+echo 'TorrServer API: authentication, 1024 MiB/95%/25%/6250 KiB/s/20 connections, preservation, no-op, read-only and validation passed.'
