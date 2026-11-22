@@ -112,6 +112,7 @@ fi
 # Existing files are retained. Repair only missing Cron entries if the watchdog
 # file is present; never overwrite a pre-existing custom watchdog.
 WATCHDOG_REPLACE=0
+WATCHDOG_CREATED=0
 WATCHDOG_BACKUP=''
 if [ -e "$WATCHDOG" ]; then
     [ -f "$WATCHDOG" ] && [ -x "$WATCHDOG" ] &&
@@ -335,6 +336,7 @@ if [ ! -e "$WATCHDOG" ] || [ "$WATCHDOG_REPLACE" -eq 1 ]; then
     fi
     mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
     TMP_WATCHDOG=''
+    WATCHDOG_CREATED=1
 else
     printf 'Актуальный watchdog оставлен без изменений.\n'
 fi
@@ -347,10 +349,30 @@ if [ "$CRON_CHANGED" -eq 1 ]; then
     mv -f "$TMP_CRON" "$CRONTAB" || fail 'Не удалось обновить crontab'
     TMP_CRON=''
     if ! "$CRON_INIT" restart; then
-        cp -p "$CRON_BACKUP" "$CRONTAB" ||
+        # Restore the previous Cron atomically; never write through a link.
+        CRON_RESTORE=$(mktemp /opt/etc/.crontab.torr_restore.XXXXXX) ||
+            fail "Не удалось подготовить восстановление Cron. Копия: $CRON_BACKUP"
+        if ! cp -p "$CRON_BACKUP" "$CRON_RESTORE" ||
+           ! mv -f "$CRON_RESTORE" "$CRONTAB"; then
+            rm -f "$CRON_RESTORE"
             fail "Не удалось восстановить crontab из $CRON_BACKUP"
+        fi
         "$CRON_INIT" restart || :
-        fail "Cron не запустился. Прежний crontab восстановлен. Копия: $CRON_BACKUP"
+        if [ "$WATCHDOG_CREATED" -eq 1 ]; then
+            if [ -n "$WATCHDOG_BACKUP" ]; then
+                WATCHDOG_RESTORE=$(mktemp /opt/bin/.torr_watchdog.restore.XXXXXX) ||
+                    fail "Прежний watchdog сохранён в $WATCHDOG_BACKUP; восстановите вручную"
+                if ! cp -p "$WATCHDOG_BACKUP" "$WATCHDOG_RESTORE" ||
+                   ! mv -f "$WATCHDOG_RESTORE" "$WATCHDOG"; then
+                    rm -f "$WATCHDOG_RESTORE"
+                    fail "Не удалось восстановить watchdog из $WATCHDOG_BACKUP"
+                fi
+            else
+                rm -f "$WATCHDOG" ||
+                    fail 'Не удалось удалить неполную новую установку watchdog'
+            fi
+        fi
+        fail "Cron не запустился. Прежние Cron и watchdog восстановлены. Копия: $CRON_BACKUP"
     fi
     rm -f "$CRON_BACKUP"
 fi
