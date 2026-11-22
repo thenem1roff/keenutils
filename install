@@ -930,7 +930,9 @@ configure_torr_cache() {
     return "$res"
 }
 watchdog_complete() {
+    [ ! -L /opt/bin/torr_watchdog.sh ] &&
     [ -x /opt/bin/torr_watchdog.sh ] &&
+    grep -Fqx '# KeenUtils TorrServer watchdog v2' /opt/bin/torr_watchdog.sh &&
     sh -n /opt/bin/torr_watchdog.sh >/dev/null 2>&1 &&
     [ -f /opt/etc/crontab ] && have grep &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab &&
