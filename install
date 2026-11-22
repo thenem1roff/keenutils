@@ -54,7 +54,7 @@ pause_menu() {
 }
 ask_yes() {
     question=$1
-    default=$2
+    default=${2:-yes}
     while :; do
         if [ "$default" = yes ]; then
             printf '%s [Y/n]: ' "$question"
@@ -132,7 +132,7 @@ ensure_utils_alias() {
     say 'Для запуска KeenUtils используйте: utils'
 }
 valid_keenutils() {
-    [ -s "$1" ] && sh -n "$1" >/dev/null 2>&1 &&
+    [ ! -L "$1" ] && [ -s "$1" ] && sh -n "$1" >/dev/null 2>&1 &&
         grep -Fq '# KeenUtils Installer:' "$1" &&
         grep -Fq 'torrserver_menu() {' "$1"
 }
@@ -222,9 +222,22 @@ update_keenutils() {
         return 0
     fi
     backup=/opt/bin/keenutils.backup
-    if ! cp -p "$KEENUTILS_BIN" "$backup"; then
+    if [ -L "$backup" ] || { [ -e "$backup" ] && [ ! -f "$backup" ]; }; then
         rm -f "$newfile"
-        err 'Не удалось создать резервную копию. Обновление отменено.'
+        err 'Путь резервной копии KeenUtils занят ссылкой или необычным файлом.'
+        return 1
+    fi
+    # Never copy through an existing symlink or truncate a known-good
+    # backup. Write a complete snapshot and atomically publish it.
+    backup_tmp=$(mktemp /opt/bin/.keenutils.backup.XXXXXX) || {
+        rm -f "$newfile"
+        return 1
+    }
+    if ! cp -p "$KEENUTILS_BIN" "$backup_tmp" ||
+       ! valid_keenutils "$backup_tmp" ||
+       ! mv -f "$backup_tmp" "$backup"; then
+        rm -f "$newfile" "$backup_tmp"
+        err 'Не удалось безопасно создать резервную копию. Обновление отменено.'
         return 1
     fi
     if ! chmod 755 "$newfile" || ! mv -f "$newfile" "$KEENUTILS_BIN"; then
@@ -285,7 +298,7 @@ sources_validate() {
     [ -s "$1" ] || return 1
     # Every known entry is mandatory, unique and must be owned by its upstream.
     for src_key in nfqws_feed nfqws2_feed nfqws_web_feed nfqws_menu \
-                   keenkit hydra awg torrserver torr_watchdog; do
+                   keenkit flashkeen hydra awg torrserver torr_watchdog; do
         src_found=$(awk -F '|' -v key="$src_key" '$1==key{n++}END{print n+0}' "$1")
         [ "$src_found" = 1 ] || return 1
     done
@@ -301,6 +314,11 @@ sources_validate() {
 }
 sources_refresh() {
     if [ "$SOURCES_READY" -eq 1 ]; then return 0; fi
+    if [ -L /opt/etc/keenutils ] || [ -L "$SOURCES_CACHE" ] ||
+       { [ -e "$SOURCES_CACHE" ] && [ ! -f "$SOURCES_CACHE" ]; }; then
+        err 'Каталог источников занят ссылкой или необычным файлом.'
+        return 1
+    fi
     mkdir -p /opt/etc/keenutils || return 1
     ensure_mktemp || return 1
     src_temp=$(mktemp /opt/etc/keenutils/.sources.XXXXXX) || return 1
@@ -363,21 +381,39 @@ repo_add() {
     feed=$2
     path="/opt/etc/opkg/$name.conf"
     line="src/gz $name $feed"
+    if [ -L /opt/etc/opkg ]; then
+        err 'Каталог /opt/etc/opkg не должен быть символической ссылкой.'
+        return 1
+    fi
     mkdir -p /opt/etc/opkg || return 1
-    if [ -e "$path" ]; then
+    if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+        err "Небезопасный путь конфигурации репозитория: $path"
+        return 1
+    fi
+    if [ -f "$path" ]; then
         grep -Fqx "$line" "$path" && return 0
         err "В $path есть другая конфигурация. Не перезаписываю."
         return 1
     fi
-    printf '%s\n' "$line" > "$path" || return 1
+    ensure_mktemp || return 1
+    repo_tmp=$(mktemp "/opt/etc/opkg/.keenutils-feed.XXXXXX") || return 1
+    if ! printf '%s\n' "$line" > "$repo_tmp" ||
+       ! mv -f "$repo_tmp" "$path"; then
+        rm -f "$repo_tmp"
+        err 'Не удалось сохранить конфигурацию репозитория.'
+        return 1
+    fi
     INDEX_READY=0
     say "Добавлен репозиторий: $name"
 }
 fetch_and_run() {
     fetch_key=$1
     fetch_label=$2
-    ask_yes "Скачать и запустить официальный установщик $fetch_label?" yes ||
-        { say 'Действие отменено.'; return 2; }
+    # The guided TorrServer install asks once; direct menu actions still ask.
+    if [ "${3:-}" != confirmed ]; then
+        ask_yes "Скачать и запустить официальный установщик $fetch_label?" yes ||
+            { say 'Действие отменено.'; return 2; }
+    fi
     ensure_mktemp || return 1
     fetch_temp=$(mktemp /tmp/keenutils.XXXXXX) || return 1
     TMP_FILES="$TMP_FILES $fetch_temp"
@@ -434,6 +470,10 @@ install_nfqws_web() {
 # Updates of that menu remain the responsibility of its own author.
 launch_nfqws_menu() {
     nm_target=/opt/nfqws-menu.sh
+    if [ -L "$nm_target" ]; then
+        err 'Путь nfqws-menu занят символической ссылкой. Не запускаю и не заменяю.'
+        return 1
+    fi
     if [ -f "$nm_target" ]; then
         [ -s "$nm_target" ] && sh -n "$nm_target" ||
             { err 'Существующий /opt/nfqws-menu.sh повреждён. Не перезаписываю.'; return 1; }
@@ -523,6 +563,10 @@ u_remove_flashkeen() {
 
 install_keenkit() {
     kk_target=/opt/keenkit.sh
+    if [ -L "$kk_target" ]; then
+        err 'Путь KeenKit занят символической ссылкой. Не запускаю.'
+        return 1
+    fi
     if [ -f "$kk_target" ] && [ -e /opt/bin/keenkit ]; then
         [ -s "$kk_target" ] && sh -n "$kk_target" ||
             { err 'Установленный KeenKit повреждён. Не запускаю и не перезаписываю.'; return 1; }
@@ -918,7 +962,7 @@ install_watchdog() {
         say 'Watchdog пока не установлен.'
     fi
     # The standalone installer installs missing dependencies, including Cron.
-    fetch_and_run torr_watchdog TorrServer-watchdog || return 1
+    fetch_and_run torr_watchdog TorrServer-watchdog "${1:-}" || return 1
     # Independent post-check after the external installer exits.
     watchdog_complete ||
         { err 'После установки не проверены исполняемый watchdog и обе задачи Cron.'; return 1; }
@@ -943,7 +987,7 @@ update_torrserver() {
     torr_service || { err 'Не найден init-скрипт TorrServer.'; return 1; }
     [ "$(uname -m)" = aarch64 ] ||
         { err 'Обновлятор TorrServer поддерживает только aarch64.'; return 1; }
-    fetch_and_run torrserver TorrServer-updater || return 1
+    fetch_and_run torrserver TorrServer-updater "${1:-}" || return 1
     [ -x /opt/sbin/torrserver ] ||
         { err 'После обновления бинарник TorrServer отсутствует.'; return 1; }
     # Covers an updater no-op ("уже обновлён") with a stopped service.
@@ -965,14 +1009,14 @@ install_torrserver_wizard() {
     wizard_failed=0
     say ''
     if ask_yes 'Обновить TorrServer до последней поддерживаемой версии MatriX?'; then
-        if ! update_torrserver; then
+        if ! update_torrserver confirmed; then
             err 'Обновление не завершено. Повторить можно через пункт 2.'
             wizard_failed=1
         fi
     fi
     say ''
     if ask_yes 'Установить или проверить watchdog TorrServer?'; then
-        if ! install_watchdog; then
+        if ! install_watchdog confirmed; then
             err 'Watchdog не настроен. Повторить можно через пункт 3.'
             wizard_failed=1
         fi
