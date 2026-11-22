@@ -99,7 +99,8 @@ case "$*" in
             printf '#!/bin/sh\necho "github version %s"\n' "$tag" >"$dest"
         fi
         if [ -f /tmp/keenutils-ts-corrupt-digest ]; then
-            printf '# modified but still reports the right version\n' >> "$dest"
+            # Even querying --version would execute this side effect.
+            printf '\ntouch /tmp/keenutils-ts-tampered-executed\n' >> "$dest"
         fi
         ;;
     *127.0.0.1:8090/echo*)
@@ -157,7 +158,8 @@ cleanup() {
         /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest \
         /tmp/keenutils-ts-github-fail \
         /tmp/keenutils-ts-partial-once /tmp/keenutils-ts-transfer-started \
-        /tmp/keenutils-ts-corrupt-digest /tmp/keenutils-ts-invalid-clock
+        /tmp/keenutils-ts-corrupt-digest /tmp/keenutils-ts-invalid-clock \
+        /tmp/keenutils-ts-tampered-executed
 }
 trap cleanup EXIT
 
@@ -316,12 +318,14 @@ reset_binary MatriX.141
 touch /tmp/keenutils-ts-running
 echo normal >/tmp/keenutils-ts-mode
 printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
+rm -f /tmp/keenutils-ts-tampered-executed
 touch /tmp/keenutils-ts-corrupt-digest
 if sh ./torrserver >/tmp/keenutils-ts-bad-hash.log 2>&1; then
     echo 'Tampered TorrServer passed official SHA-256 verification' >&2
     exit 1
 fi
 grep -Fq 'Контрольная сумма' /tmp/keenutils-ts-bad-hash.log
+test ! -e /tmp/keenutils-ts-tampered-executed
 /opt/sbin/torrserver --version | grep -Fq MatriX.141
 test -f /tmp/keenutils-ts-running
 rm -f /tmp/keenutils-ts-corrupt-digest
