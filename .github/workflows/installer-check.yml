@@ -170,6 +170,33 @@ jobs:
           sudo env PATH=/opt/bin:/usr/bin:/bin sh /tmp/keenutils-watchdog-audit.sh
           test ! -e /tmp/keenutils-watchdog-killed
           sudo rm -f /opt/bin/curl /opt/bin/pgrep /opt/bin/killall
+      - name: Watchdog upgrade rolls back after Cron restart failure
+        run: |
+          set -eu
+          cat <<'OLD_WATCHDOG' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
+          #!/bin/sh
+          LOG_FILE="/opt/var/log/torr_watchdog.log"
+          LOCK_DIR="/tmp/torr_watchdog.lock"
+          # Прежний способ восстановления при зависании TorrServer.
+          exit 0
+          OLD_WATCHDOG
+          sudo chmod 755 /opt/bin/torr_watchdog.sh
+          sudo cp /opt/bin/torr_watchdog.sh /tmp/keenutils-audit-old-watchdog
+          printf '* * * * * root /opt/bin/torr_watchdog.sh\n' | sudo tee /opt/etc/crontab >/dev/null
+          sudo cp /opt/etc/crontab /tmp/keenutils-audit-old-crontab
+          printf '#!/bin/sh\nexit 1\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
+          sudo chmod 755 /opt/etc/init.d/S10cron
+          if sudo sh ./torr_watchdog > /tmp/keenutils-audit-cron-failure.log 2>&1; then
+            echo 'Watchdog accepted a failed Cron restart' >&2
+            exit 1
+          fi
+          grep -Fq 'Прежние Cron и watchdog восстановлены' /tmp/keenutils-audit-cron-failure.log
+          cmp /tmp/keenutils-audit-old-watchdog /opt/bin/torr_watchdog.sh
+          cmp /tmp/keenutils-audit-old-crontab /opt/etc/crontab
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
+          sudo sh ./torr_watchdog > /tmp/keenutils-audit-cron-recovered.log
+          grep -Fq '# KeenUtils TorrServer watchdog v2' /opt/bin/torr_watchdog.sh
+          grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab
       - name: Entware status and confirmation regression tests
         run: sh tests/installer-regressions.sh
       - name: TorrServer cache settings and mount regression tests
