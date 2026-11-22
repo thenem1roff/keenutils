@@ -30,9 +30,16 @@ install_pkg() {
     chmod 755 /opt/sbin/torrserver
 }
 fetch_and_run() {
-    [ "$1" = torrserver ] || return 2
-    printf 'update\n' >>/tmp/keenutils-torr-test-log
-    [ -f /tmp/keenutils-torr-test-updater-fails ] && return 1
+    case "$1" in
+        torrserver)
+            printf 'update\n' >>/tmp/keenutils-torr-test-log
+            printf 'updater-confirmed:%s\n' "${3:-no}" >>/tmp/keenutils-torr-test-log
+            [ -f /tmp/keenutils-torr-test-updater-fails ] && return 1 ;;
+        torr_watchdog)
+            printf 'watchdog-confirmed:%s\n' "${3:-no}" >>/tmp/keenutils-torr-test-log
+            touch /tmp/keenutils-torr-test-watchdog ;;
+        *) return 2 ;;
+    esac
     return 0
 }
 configure_torr_cache() {
@@ -174,6 +181,7 @@ ask_yes() {
 install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-wizard.log
 test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
 grep -Fxq update /tmp/keenutils-torr-test-log
+grep -Fxq updater-confirmed:confirmed /tmp/keenutils-torr-test-log
 grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
 grep -Fq 'watchdog уже установлен' /tmp/keenutils-torr-wizard.log
 grep -Fq 'Настройка TorrServer завершена' /tmp/keenutils-torr-wizard.log
@@ -202,6 +210,28 @@ test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
 grep -Fxq cache:confirmed /tmp/keenutils-torr-test-log
 grep -Fq 'Обновление не завершено' /tmp/keenutils-torr-wizard-update-fail.log
 rm -f /tmp/keenutils-torr-test-updater-fails
+
+# 13b. A missing watchdog is installed through the SAME function as menu 3,
+# and the wizard confirmation is forwarded rather than asking twice.
+rm -f /tmp/keenutils-torr-test-watchdog
+rm -f /tmp/keenutils-torr-test-updater-fails
+: >/tmp/keenutils-torr-test-log
+printf '\n\n\n' >/tmp/keenutils-torr-wizard-answers
+install_torrserver_wizard </tmp/keenutils-torr-wizard-answers >/tmp/keenutils-torr-watchdog-new.log
+grep -Fxq watchdog-confirmed:confirmed /tmp/keenutils-torr-test-log
+test "$(grep -c '^prompt:' /tmp/keenutils-torr-test-log)" -eq 3
+test -f /tmp/keenutils-torr-test-watchdog
+
+# The real prompt must accept a missing second argument under set -u.
+awk '/^ask_yes\(\) \{/ {copy=1}
+     /^# opkg status can/ {copy=0}
+     copy {print}' install >/tmp/keenutils-audit-ask-yes.sh
+printf '\n' | sh -u -c '. /tmp/keenutils-audit-ask-yes.sh; ask_yes "Пример?"' >/tmp/keenutils-audit-default-yes.log
+grep -Fq '[Y/n]' /tmp/keenutils-audit-default-yes.log
+if printf 'n\n' | sh -u -c '. /tmp/keenutils-audit-ask-yes.sh; ask_yes "Пример?"' >/dev/null; then
+    echo 'Answer n incorrectly accepted' >&2
+    exit 1
+fi
 
 # 14. If installation/start fails, the wizard must not request anything else.
 reset
