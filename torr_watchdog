@@ -1,6 +1,6 @@
 #!/bin/sh
 # Установка watchdog TorrServer для Keenetic / Entware.
-# Запуск: curl -fsSL https://raw.githubusercontent.com/thenem1roff/keenutils/main/torr_watchdog | sh
+# Запуск: скачать в файл и запустить через sh (не через curl | sh).
 set -eu
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
@@ -13,11 +13,16 @@ have() { command -v "$1" >/dev/null 2>&1; }
 WATCHDOG=/opt/bin/torr_watchdog.sh
 CRONTAB=/opt/etc/crontab
 INDEX_READY=0
+# Both files are owned by Entware/KeenUtils; reject foreign symlinks even
+# when their targets currently appear valid.
+[ ! -L "$WATCHDOG" ] && [ ! -L "$CRONTAB" ] ||
+    fail 'Watchdog или crontab является символической ссылкой. Установка отменена.'
 
 # Check the complete existing installation BEFORE installing dependencies or
 # modifying anything. Running this installer again is safe when already set up.
 watchdog_complete() {
     [ -x "$WATCHDOG" ] &&
+    grep -Fqx '# KeenUtils TorrServer watchdog v2' "$WATCHDOG" &&
     sh -n "$WATCHDOG" >/dev/null 2>&1 &&
     [ -f "$CRONTAB" ] && have grep &&
     grep -Fqx '* * * * * root /opt/bin/torr_watchdog.sh' "$CRONTAB" &&
@@ -106,11 +111,22 @@ fi
 
 # Existing files are retained. Repair only missing Cron entries if the watchdog
 # file is present; never overwrite a pre-existing custom watchdog.
+WATCHDOG_REPLACE=0
+WATCHDOG_BACKUP=''
 if [ -e "$WATCHDOG" ]; then
     [ -f "$WATCHDOG" ] && [ -x "$WATCHDOG" ] &&
         sh -n "$WATCHDOG" >/dev/null 2>&1 ||
         fail 'Watchdog существует, но файл повреждён или не исполняемый. Не перезаписываю.'
-    printf 'Обнаружен действующий файл watchdog; будет проверен только Cron.\n'
+    if grep -Fqx '# KeenUtils TorrServer watchdog v2' "$WATCHDOG"; then
+        printf 'Обнаружен актуальный watchdog; будет проверен Cron.\n'
+    elif grep -Fqx '# Прежний способ восстановления при зависании TorrServer.' "$WATCHDOG" &&
+         grep -Fqx 'LOCK_DIR="/tmp/torr_watchdog.lock"' "$WATCHDOG" &&
+         grep -Fqx 'LOG_FILE="/opt/var/log/torr_watchdog.log"' "$WATCHDOG"; then
+        WATCHDOG_REPLACE=1
+        printf 'Обнаружен старый watchdog KeenUtils; подготовлено безопасное обновление.\n'
+    else
+        fail 'Обнаружен сторонний или изменённый watchdog. Автозамена запрещена.'
+    fi
 fi
 
 CRON_INIT=''
@@ -155,6 +171,7 @@ TMP_CRON=$(mktemp /opt/etc/.crontab.torr_watchdog.XXXXXX) || fail 'Не удал
 
 cat > "$TMP_WATCHDOG" <<'WATCHDOG_SCRIPT'
 #!/bin/sh
+# KeenUtils TorrServer watchdog v2
 
 LOG_FILE="/opt/var/log/torr_watchdog.log"
 LOCK_DIR="/tmp/torr_watchdog.lock"
@@ -231,9 +248,9 @@ start_server() {
     while [ "$i" -lt 3 ]; do
         sleep 2
         CODE=$(check_api)
-        if [ "$CODE" = "200" ] &&
+        if { [ "$CODE" = "200" ] || [ "$CODE" = "401" ]; } &&
             pgrep -x torrserver >/dev/null 2>&1; then
-            log_message "УСПЕХ: TorrServer запущен, HTTP 200"
+            log_message "УСПЕХ: TorrServer запущен, HTTP $CODE"
             return 0
         fi
         i=$((i + 1))
@@ -252,14 +269,14 @@ if [ -z "$PIDS" ]; then
 fi
 
 HTTP_CODE=$(check_api)
-if [ "$HTTP_CODE" = "200" ]; then
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
     exit 0
 fi
 
 # Не убиваем процесс из-за одиночного кратковременного сбоя API.
 sleep 2
 HTTP_RETRY=$(check_api)
-if [ "$HTTP_RETRY" = "200" ]; then
+if [ "$HTTP_RETRY" = "200" ] || [ "$HTTP_RETRY" = "401" ]; then
     exit 0
 fi
 
@@ -307,11 +324,19 @@ do
     fi
 done
 
-if [ ! -e "$WATCHDOG" ]; then
+if [ ! -e "$WATCHDOG" ] || [ "$WATCHDOG_REPLACE" -eq 1 ]; then
+    if [ "$WATCHDOG_REPLACE" -eq 1 ]; then
+        mkdir -p /opt/var/backups/keenutils ||
+            fail 'Не удалось создать каталог для копии watchdog'
+        WATCHDOG_BACKUP=$(mktemp /opt/var/backups/keenutils/torr_watchdog-before-update.XXXXXX) ||
+            fail 'Не удалось создать копию watchdog'
+        cp -p "$WATCHDOG" "$WATCHDOG_BACKUP" ||
+            fail 'Не удалось сохранить исходный watchdog; обновление отменено'
+    fi
     mv -f "$TMP_WATCHDOG" "$WATCHDOG" || fail 'Не удалось установить watchdog'
     TMP_WATCHDOG=''
 else
-    printf 'Существующий файл watchdog оставлен без изменений.\n'
+    printf 'Актуальный watchdog оставлен без изменений.\n'
 fi
 
 if [ "$CRON_CHANGED" -eq 1 ]; then
