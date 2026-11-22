@@ -270,14 +270,20 @@ rollback() {
 }
 
 echo "Ожидание безопасного момента..."
-
-while :; do
-    SEC=$(date +%S)
+# Avoid hanging indefinitely if the router clock/date command is broken.
+SYNC_SECONDS=0
+while [ "$SYNC_SECONDS" -lt 65 ]; do
+    SEC=$(date +%S) || fail 'Не удалось прочитать секунды системных часов'
     case "$SEC" in
         03|33) break ;;
+        [0-5][0-9]) : ;;
+        *) fail 'Системное время некорректно. Безопасное обновление отменено.' ;;
     esac
     sleep 1
+    SYNC_SECONDS=$((SYNC_SECONDS + 1))
 done
+[ "$SYNC_SECONDS" -lt 65 ] ||
+    fail 'Не дождались безопасного момента для замены TorrServer. Бинарник не изменён.'
 
 echo "Остановка TorrServer..."
 if service_running; then
