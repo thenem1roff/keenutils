@@ -1238,6 +1238,10 @@ u_remove_nfqws_menu() {
 # Disable only the two exact watchdog cron entries. Other Cron jobs are
 # untouched. Unknown watchdog entries prevent unsafe partial removal.
 u_disable_watchdog() {
+    if [ -L /opt/etc/crontab ]; then
+        err 'Crontab является символической ссылкой. Удаление watchdog остановлено.'
+        return 1
+    fi
     if [ -f /opt/etc/crontab ]; then
         U_CRON_A='* * * * * root /opt/bin/torr_watchdog.sh'
         U_CRON_B='* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh'
@@ -1254,18 +1258,25 @@ u_disable_watchdog() {
         cp -p /opt/etc/crontab "$U_CRON_BACKUP" ||
             { err 'Не удалось сохранить резервную копию Cron.'; return 1; }
         U_CRON_TMP=$(mktemp /opt/etc/.keenutils-cron.XXXXXX) || return 1
-        if ! awk -v a="$U_CRON_A" -v b="$U_CRON_B" \
-            '$0!=a && $0!=b {print}' /opt/etc/crontab > "$U_CRON_TMP"; then
+        U_CRON_CONTENT=$(mktemp /opt/etc/.keenutils-cron-content.XXXXXX) || {
             rm -f "$U_CRON_TMP"
             return 1
-        fi
-        if ! cat "$U_CRON_TMP" > /opt/etc/crontab; then
-            cp -p "$U_CRON_BACKUP" /opt/etc/crontab || :
-            rm -f "$U_CRON_TMP"
-            err 'Не удалось обновить Cron; использована резервная копия.'
+        }
+        if ! cp -p /opt/etc/crontab "$U_CRON_TMP" ||
+           ! awk -v a="$U_CRON_A" -v b="$U_CRON_B" \
+               '$0!=a && $0!=b {print}' /opt/etc/crontab > "$U_CRON_CONTENT" ||
+           ! cat "$U_CRON_CONTENT" > "$U_CRON_TMP"; then
+            rm -f "$U_CRON_TMP" "$U_CRON_CONTENT"
+            err 'Не удалось подготовить новый Cron; исходный файл сохранён.'
             return 1
         fi
-        rm -f "$U_CRON_TMP"
+        rm -f "$U_CRON_CONTENT"
+        # Replace the complete file atomically; never truncate live crontab.
+        if ! mv -f "$U_CRON_TMP" /opt/etc/crontab; then
+            rm -f "$U_CRON_TMP"
+            err 'Не удалось атомарно обновить Cron; исходный файл сохранён.'
+            return 1
+        fi
         say "Резервная копия Cron: $U_CRON_BACKUP"
     fi
     if [ -e /opt/bin/torr_watchdog.sh ] || [ -L /opt/bin/torr_watchdog.sh ]; then
@@ -1364,6 +1375,34 @@ u_cleanup_guard() {
     esac
     return 0
 }
+# Do not recursively delete application leftovers containing a separately
+# mounted USB, bind or network filesystem. /opt itself may be a symlink.
+u_cleanup_mount_guard() {
+    U_MOUNT_TARGET=$1
+    [ -L "$U_MOUNT_TARGET" ] && return 0
+    [ -d "$U_MOUNT_TARGET" ] || return 0
+    [ -r /proc/mounts ] || {
+        err 'Невозможно проверить точки монтирования перед удалением каталога.'
+        return 1
+    }
+    if u_cleanup_mount_present "$U_MOUNT_TARGET"; then
+        err "Обнаружена точка монтирования внутри $U_MOUNT_TARGET. Очистка отменена."
+        return 1
+    fi
+    if have readlink; then
+        U_RESOLVED_TARGET=$(readlink -f "$U_MOUNT_TARGET" 2>/dev/null) || U_RESOLVED_TARGET=''
+        if [ -n "$U_RESOLVED_TARGET" ] &&
+            [ "$U_RESOLVED_TARGET" != "$U_MOUNT_TARGET" ] &&
+            u_cleanup_mount_present "$U_RESOLVED_TARGET"; then
+            err "Обнаружена точка монтирования внутри $U_RESOLVED_TARGET. Очистка отменена."
+            return 1
+        fi
+    fi
+    return 0
+}
+u_cleanup_mount_present() {
+    awk -v p="$1" '$2 == p || index($2, p "/") == 1 {found=1; exit} END {exit !found}' /proc/mounts
+}
 u_cleanup() {
     U_CLEAN_ID=$1
     u_detect "$U_CLEAN_ID"
@@ -1406,8 +1445,17 @@ u_cleanup() {
             return 1
         fi
     fi
-    ask_yes 'Безвозвратно удалить перечисленные остатки?' yes || return 0
     for U_CP in $U_CLEAN_PATHS; do
+        u_cleanup_mount_guard "$U_CP" || return 1
+    done
+    ask_yes 'Безвозвратно удалить перечисленные остатки?' yes || return 0
+    # The program or its mount layout may have changed while the user was
+    # reading the prompt. Revalidate before every irreversible operation.
+    u_detect "$U_CLEAN_ID"
+    [ "$U_INSTALLED" -eq 0 ] && u_cleanup_guard "$U_CLEAN_ID" ||
+        { err 'Программа появилась снова или запущена служба. Очистка отменена.'; return 1; }
+    for U_CP in $U_CLEAN_PATHS; do
+        u_cleanup_mount_guard "$U_CP" || return 1
         # Revalidate the launcher after confirmation: never erase a foreign menu.
         if [ "$U_CLEAN_ID" = nfqws-menu ] && [ "$U_CP" = /opt/bin/menu ] &&
            ! u_nfqws_menu_launcher; then
