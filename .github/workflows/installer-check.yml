@@ -85,6 +85,22 @@ jobs:
           grep -q 'уже актуален' /tmp/keenutils-noop.log
           grep -q 'Выход.' /tmp/keenutils-noop.log
           cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
+      - name: KeenUtils update refuses unsafe symlink backups
+        run: |
+          set -eu
+          printf '\n# audit-update-pending\n' | sudo tee -a /opt/bin/keenutils >/dev/null
+          printf 'DO NOT OVERWRITE\n' > /tmp/keenutils-audit-backup-canary
+          sudo rm -f /opt/bin/keenutils.backup
+          sudo ln -s /tmp/keenutils-audit-backup-canary /opt/bin/keenutils.backup
+          printf '99\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-audit-update-link.log
+          grep -Fq 'занят ссылкой' /tmp/keenutils-audit-update-link.log
+          grep -Fxq 'DO NOT OVERWRITE' /tmp/keenutils-audit-backup-canary
+          grep -Fq '# audit-update-pending' /opt/bin/keenutils
+          sudo rm -f /opt/bin/keenutils.backup
+          printf '99\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-audit-update-recovered.log
+          cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
       - name: TorrServer submenu navigation and independent actions
         run: |
           set -eu
@@ -129,6 +145,31 @@ jobs:
           sudo sh ./torr_watchdog | grep -q 'уже установлен'
           test "$repaired" = "$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
 
+      - name: Watchdog keeps authenticated TorrServer alive (HTTP 401)
+        run: |
+          set -eu
+          awk '/^cat > .*WATCHDOG_SCRIPT/ {inside=1;next}
+               /^WATCHDOG_SCRIPT$/ {inside=0}
+               inside {print}' torr_watchdog > /tmp/keenutils-watchdog-audit.sh
+          grep -Fq '# KeenUtils TorrServer watchdog v2' /tmp/keenutils-watchdog-audit.sh
+          sudo mkdir -p /opt/bin
+          cat <<'MOCK_HTTP401' | sudo tee /opt/bin/curl >/dev/null
+          #!/bin/sh
+          printf '401'
+          MOCK_HTTP401
+          cat <<'MOCK_PGREP' | sudo tee /opt/bin/pgrep >/dev/null
+          #!/bin/sh
+          test "$1" = '-x' && test "$2" = torrserver
+          MOCK_PGREP
+          cat <<'MOCK_KILLALL' | sudo tee /opt/bin/killall >/dev/null
+          #!/bin/sh
+          touch /tmp/keenutils-watchdog-killed
+          MOCK_KILLALL
+          sudo chmod 755 /opt/bin/curl /opt/bin/pgrep /opt/bin/killall
+          sudo rm -f /tmp/keenutils-watchdog-killed
+          sudo env PATH=/opt/bin:/usr/bin:/bin sh /tmp/keenutils-watchdog-audit.sh
+          test ! -e /tmp/keenutils-watchdog-killed
+          sudo rm -f /opt/bin/curl /opt/bin/pgrep /opt/bin/killall
       - name: Entware status and confirmation regression tests
         run: sh tests/installer-regressions.sh
       - name: TorrServer cache settings and mount regression tests
