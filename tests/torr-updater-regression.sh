@@ -18,7 +18,11 @@ exec /usr/bin/uname "$@"
 MOCK_UNAME
 cat >/opt/bin/date <<'MOCK_DATE'
 #!/bin/sh
-[ "$1" = '+%S' ] && { echo 03; exit 0; }
+[ "$1" = '+%S' ] && {
+    if [ -f /tmp/keenutils-ts-invalid-clock ]; then echo invalid; exit 0; fi
+    echo 03
+    exit 0
+}
 exec /usr/bin/date "$@"
 MOCK_DATE
 cat >/opt/bin/sleep <<'MOCK_SLEEP'
@@ -285,4 +289,19 @@ fi
 grep -Fq 'Не найден проверенный релиз MatriX' /tmp/keenutils-ts-no-stable.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
 
-echo 'TorrServer updater: service safety, rollback, API, auth, production MatriX selection and experimental Silo exclusions passed.'
+# A broken clock must never leave the updater spinning indefinitely,
+# and must never stop/replace the running server.
+reset_binary MatriX.141
+touch /tmp/keenutils-ts-running
+printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
+echo normal >/tmp/keenutils-ts-mode
+touch /tmp/keenutils-ts-invalid-clock
+if sh ./torrserver >/tmp/keenutils-ts-clock-fail.log 2>&1; then
+    echo 'Updater accepted an invalid router clock' >&2; exit 1
+fi
+grep -Fq 'Системное время некорректно' /tmp/keenutils-ts-clock-fail.log
+/opt/sbin/torrserver --version | grep -Fq MatriX.141
+test -f /tmp/keenutils-ts-running
+rm -f /tmp/keenutils-ts-invalid-clock
+
+echo 'TorrServer updater: service safety, rollback, clock, API, auth and stable release filtering passed.'
