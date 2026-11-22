@@ -848,7 +848,7 @@ configure_torr_cache_inner() {
     find_entware_disk || return 1
     CACHE_DIR="$DISK_ROOT/tscashe"
     say "Предлагается: $CACHE_DIR"
-    say 'Кеш: 1024 МиБ (1073741824 байт); впереди: 95%; предзагрузка: 5% (51 МиБ)'
+    say 'Кеш: 1024 МиБ (1073741824 байт); впереди: 95%; предзагрузка: 25% (256 МиБ)'
     say 'Ограничение скорости загрузки: 6250 КиБ/с (6400000 байт/с); соединений на торрент: 20'
     # Check all requested values, not just the cache path. An already
     # configured disk cache can still need the size/speed preset.
@@ -856,7 +856,7 @@ configure_torr_cache_inner() {
         jq -e --arg p "$CACHE_DIR" '
           .TorrentsSavePath == $p and .UseDisk == true and
           .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
-          .PreloadCache == 5 and .DownloadRateLimit == 6250 and
+          .PreloadCache == 25 and .DownloadRateLimit == 6250 and
           .ConnectionsLimit == 20
         ' >/dev/null; then
         say 'Настройки кеша, скорости и соединений уже совпадают. Изменений не требуется.'
@@ -888,7 +888,7 @@ configure_torr_cache_inner() {
         jq -c --arg p "$CACHE_DIR" '
           .TorrentsSavePath=$p | .UseDisk=true |
           .CacheSize=1073741824 | .ReaderReadAHead=95 |
-          .PreloadCache=5 | .DownloadRateLimit=6250 |
+          .PreloadCache=25 | .DownloadRateLimit=6250 |
           .ConnectionsLimit=20
         ') || return 1
     if ! set_torr_settings "$updated"; then
@@ -902,11 +902,11 @@ configure_torr_cache_inner() {
                 jq -e --arg p "$CACHE_DIR" '
                   .TorrentsSavePath == $p and .UseDisk == true and
                   .CacheSize == 1073741824 and .ReaderReadAHead == 95 and
-                  .PreloadCache == 5 and .DownloadRateLimit == 6250 and
+                  .PreloadCache == 25 and .DownloadRateLimit == 6250 and
                   .ConnectionsLimit == 20
                 ' >/dev/null; then
                 say "УСПЕХ: UseDisk=true, путь кеша: $CACHE_DIR"
-                say 'Кеш: 1024 МиБ; впереди: 95%; предзагрузка: 5%; скорость: 6250 КиБ/с; соединений: 20.'
+                say 'Кеш: 1024 МиБ; впереди: 95%; предзагрузка: 25%; скорость: 6250 КиБ/с; соединений: 20.'
                 say 'Все изменения подтверждены повторным чтением из TorrServer.'
                 return 0
             fi
@@ -915,7 +915,7 @@ configure_torr_cache_inner() {
         sleep 2
     done
     err 'TorrServer не подтвердил новые параметры (возможен режим read-only).'
-    err "Требуемые: путь $CACHE_DIR, кеш 1024 МиБ, впереди 95%, предзагрузка 5%, скорость 6250 КиБ/с, соединений 20."
+    err "Требуемые: путь $CACHE_DIR, кеш 1024 МиБ, впереди 95%, предзагрузка 25%, скорость 6250 КиБ/с, соединений 20."
     err "Резервная копия: $backup"
     return 1
 }
@@ -1024,7 +1024,7 @@ install_torrserver_wizard() {
         fi
     fi
     say ''
-    if ask_yes 'Настроить дисковый кеш (1024 МиБ, 95/5%, 6250 КиБ/с, 20 соединений)?'; then
+    if ask_yes 'Настроить дисковый кеш (1024 МиБ, 95/25%, 6250 КиБ/с, 20 соединений)?'; then
         if ! setup_torr_cache confirmed; then
             err 'Настройки кеша и ограничений не подтверждены. Повторите через пункт 4.'
             wizard_failed=1
