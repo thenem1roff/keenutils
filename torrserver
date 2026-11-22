@@ -53,7 +53,319 @@ valid_version() {
 # GitHub /releases/latest points to an explicitly unfinished Silo rewrite.
 # Select the newest working MatriX release from the official releases list.
 latest_supported_release() {
-    jq -r '.[].tag_name | select(test("^MatriX[.][0-9]+([.][0-9]+)*$"))' "$1" |
+    # Entware jq may be compiled without ONIGURUMA; do not use jq test(),
+    # match() or sub(). Decode JSON with jq and validate tags using grep ERE.
+    jq -r '.[].tag_name' "$1" |
+        grep -E '^MatriX\\.[0-9]+(\\.[0-9]+)*
+
+echo "=== TorrServer Updater ==="
+
+[ "$(uname -m)" = "aarch64" ] ||
+    fail "Поддерживается только ARM64"
+
+[ -x "$BIN" ] || fail "TorrServer не найден"
+[ -f "$SERVICE" ] || fail "Скрипт службы не найден"
+
+# Install ONLY missing Entware dependencies before the update. Works also
+# when called directly as: curl -fsSL .../torrserver | sh
+have() { command -v "$1" >/dev/null 2>&1; }
+have opkg || fail 'Не найден Entware opkg'
+[ "$(id -u)" = 0 ] || fail 'Требуются права root'
+INDEX_READY=0
+if ! have grep; then
+    opkg update || fail 'Не удалось обновить индекс Entware'
+    INDEX_READY=1
+    opkg install grep || fail 'Не удалось установить grep'
+    have grep || fail 'grep недоступен после установки'
+fi
+# Entware can mark explicitly installed packages as "install user installed".
+# Use opkg's installed list instead of assuming a single Status flag.
+pkg_installed() {
+    opkg list-installed "$1" 2>/dev/null |
+        awk -v name="$1" '$1 == name && $2 == "-" { found=1; exit } END { exit !found }'
+}
+ensure_package() {
+    package=$1
+    if pkg_installed "$package"; then return 0; fi
+    if [ "$INDEX_READY" -eq 0 ]; then
+        echo 'Обновление списка пакетов Entware...'
+        opkg update || fail 'Не удалось обновить индекс Entware'
+        INDEX_READY=1
+    fi
+    echo "Установка зависимости: $package"
+    opkg install "$package" || fail "Не удалось установить $package"
+    pkg_installed "$package" || fail "Пакет $package не найден после установки"
+}
+ensure_command() {
+    cmd=$1
+    tool_package=$2
+    have "$cmd" && return 0
+    ensure_package "$tool_package"
+    have "$cmd" || fail "Не найдена команда $cmd после установки $tool_package"
+}
+echo 'Проверка зависимостей TorrServer Updater...'
+ensure_package ca-certificates
+ensure_command curl curl
+ensure_command sed sed
+ensure_command head coreutils-head
+ensure_command cp coreutils-cp
+ensure_command mv coreutils-mv
+ensure_command chmod coreutils-chmod
+ensure_command mktemp coreutils-mktemp
+ensure_command awk gawk
+ensure_command date coreutils-date
+ensure_command sleep coreutils-sleep
+ensure_command rm coreutils-rm
+ensure_command pgrep procps-ng-pgrep
+ensure_command jq jq
+ensure_command sha256sum coreutils-sha256sum
+
+CURRENT=$(version "$BIN")
+valid_version "$CURRENT" ||
+    fail "Не удалось определить установленную версию"
+case "$CURRENT" in
+    MatriX.[0-9]*) : ;;
+    *) fail "Установлена другая серия ($CURRENT). Автоматическое обновление разрешено только для рабочей MatriX; файлы не изменены." ;;
+esac
+
+echo "Установлена: $CURRENT"
+echo "Проверка GitHub..."
+
+# Download to a file rather than stdout: curl retries can otherwise combine
+# fragments of failed transfers, producing an invalid release list.
+RELEASE_TMP=$(mktemp /tmp/keenutils-ts-releases.XXXXXX) ||
+    fail "Не удалось создать временный файл для списка релизов"
+curl -fsSL --compressed --retry 2 \
+    --connect-timeout 10 --max-time 45 \
+    -o "$RELEASE_TMP" "$API" ||
+    fail "GitHub API недоступен"
+
+LATEST=$(latest_supported_release "$RELEASE_TMP")
+valid_version "$LATEST" ||
+    fail 'Не найден проверенный релиз MatriX. Экспериментальные серии (Silo) игнорируются.'
+
+echo "Доступна:    $LATEST"
+
+if [ "$CURRENT" = "$LATEST" ]; then
+    echo "TorrServer уже обновлён."
+    exit 0
+fi
+
+# Compare only numeric versions within the supported MatriX series.
+is_newer() {
+    awk -v old="${CURRENT#MatriX.}" -v new="${LATEST#MatriX.}" '
+        BEGIN {
+            a = split(old, x, ".")
+            b = split(new, y, ".")
+            n = (a > b ? a : b)
+            for (i = 1; i <= n; i++) {
+                if ((y[i] + 0) > (x[i] + 0)) exit 0
+                if ((y[i] + 0) < (x[i] + 0)) exit 1
+            }
+            exit 1
+        }'
+}
+
+if ! is_newer; then
+    echo "Установленная версия не старее релиза."
+    exit 0
+fi
+
+echo "Обновление: $CURRENT -> $LATEST"
+
+# GitHub's release asset includes its SHA-256. Verify the exact asset from
+# the selected MatriX release, not the first unrelated asset/digest.
+EXPECTED_DIGEST=$(jq -er --arg tag "$LATEST" '
+    .[] | select(.tag_name == $tag) |
+    .assets[]? | select(.name == "TorrServer-linux-arm64") | .digest |
+    select(type == "string")
+' "$RELEASE_TMP") ||
+    fail 'Нет контрольной суммы ARM64-бинарника в метаданных релиза'
+case "$EXPECTED_DIGEST" in sha256:*) : ;; *) fail 'Неверный формат контрольной суммы релиза' ;; esac
+EXPECTED_SHA256=${EXPECTED_DIGEST#sha256:}
+printf '%s\n' "$EXPECTED_SHA256" | grep -Eq '^[0-9a-f]{64}$' ||
+    fail 'Некорректная контрольная сумма релиза'
+
+TMP=$(mktemp /opt/sbin/.torrserver.XXXXXX) ||
+    fail "Не удалось создать временный файл"
+
+URL="https://github.com/YouROK/TorrServer/releases/download/$LATEST/TorrServer-linux-arm64"
+
+echo "Скачивание бинарника..."
+# Slow GitHub release asset downloads can exceed five minutes. Retry each
+# failed transfer as a new curl invocation with HTTP range resume, preserving
+# already written bytes. curl's built-in --retry resets the output file.
+DOWNLOAD_ATTEMPT=1
+DOWNLOAD_ATTEMPTS=4
+while :; do
+    if curl -fL --connect-timeout 15 --max-time 1200 \
+        --continue-at - -o "$TMP" "$URL"; then
+        break
+    fi
+    if [ "$DOWNLOAD_ATTEMPT" -ge "$DOWNLOAD_ATTEMPTS" ]; then
+        fail "Не удалось скачать бинарник после $DOWNLOAD_ATTEMPTS попыток"
+    fi
+    echo "Загрузка прервалась, сохранено $(wc -c < "$TMP") байт."
+    echo "Повторная попытка с продолжением загрузки..."
+    DOWNLOAD_ATTEMPT=$((DOWNLOAD_ATTEMPT + 1))
+    sleep 2
+done
+
+[ -s "$TMP" ] || fail "Скачанный файл пуст"
+
+# Never execute unverified downloaded bytes, even just to ask --version.
+# Verify the official SHA-256 BEFORE chmod/launching the asset as root.
+ACTUAL_SHA256=$(sha256sum "$TMP" | awk '{print $1}') ||
+    fail 'Не удалось вычислить SHA-256 загруженного файла'
+[ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] ||
+    fail 'Контрольная сумма скачанного TorrServer не совпадает с официальным релизом'
+
+chmod 755 "$TMP" || fail "Ошибка chmod"
+DOWNLOADED=$(version "$TMP")
+[ "$DOWNLOADED" = "$LATEST" ] ||
+    fail "Версия скачанного файла не совпадает: $DOWNLOADED"
+
+echo "Бинарник проверен: SHA-256 и версия $DOWNLOADED подтверждены"
+
+# Keep a complete backup on the same filesystem. Never truncate a previous
+# valid backup if copying the installed binary fails.
+echo "Создание резервной копии..."
+BACKUP_TMP=$(mktemp /opt/sbin/.torrserver.backup.XXXXXX) ||
+    fail "Не удалось подготовить резервную копию"
+cp -p "$BIN" "$BACKUP_TMP" ||
+    fail "Не удалось скопировать установленный бинарник"
+[ "$(version "$BACKUP_TMP")" = "$CURRENT" ] ||
+    fail "Резервная копия не прошла проверку версии"
+mv -f "$BACKUP_TMP" "$BACKUP" ||
+    fail "Не удалось сохранить резервную копию"
+BACKUP_TMP=""
+
+service_running() {
+    pgrep -x torrserver >/dev/null 2>&1
+}
+
+# Entware rc.func can return nonzero and print "Checking torrserver... dead"
+# when the daemon was already stopped. Verify the real process state rather
+# than interpreting the exit status of "stop" as proof of failure.
+stop_and_verify() {
+    if ! service_running; then
+        echo 'TorrServer уже остановлен — останавливать нечего.'
+        return 0
+    fi
+    "$SERVICE" stop ||
+        echo 'Init-скрипт вернул ошибку остановки; проверяю процесс...'
+    tries=0
+    while service_running && [ "$tries" -lt 10 ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    if service_running; then
+        return 1
+    fi
+    return 0
+}
+
+rollback() {
+    echo "Восстановление предыдущей версии..."
+    stop_and_verify ||
+        fail "Не удалось безопасно остановить новую версию для отката! Копия: $BACKUP"
+    RESTORE_TMP=$(mktemp /opt/sbin/.torrserver.restore.XXXXXX) ||
+        fail "Не удалось создать временный файл отката! Копия: $BACKUP"
+    cp -p "$BACKUP" "$RESTORE_TMP" ||
+        fail "Не удалось скопировать резервную версию! Копия: $BACKUP"
+    [ "$(version "$RESTORE_TMP")" = "$CURRENT" ] ||
+        fail "Проверка резервной версии не пройдена! Копия: $BACKUP"
+    mv -f "$RESTORE_TMP" "$BIN" ||
+        fail "Не удалось восстановить бинарник! Копия: $BACKUP"
+    RESTORE_TMP=""
+    if [ "$WAS_RUNNING" -eq 1 ]; then
+        "$SERVICE" start ||
+            echo 'Init-скрипт вернул ошибку при восстановлении службы.'
+        sleep 2
+        service_running ||
+            fail "Предыдущая версия восстановлена, но сервис не запущен!"
+    else
+        echo 'Предыдущая версия восстановлена; исходно сервис был остановлен.'
+    fi
+}
+
+echo "Ожидание безопасного момента..."
+# Avoid hanging indefinitely if the router clock/date command is broken.
+SYNC_SECONDS=0
+while [ "$SYNC_SECONDS" -lt 65 ]; do
+    SEC=$(date +%S) || fail 'Не удалось прочитать секунды системных часов'
+    case "$SEC" in
+        03|33) break ;;
+        [0-5][0-9]) : ;;
+        *) fail 'Системное время некорректно. Безопасное обновление отменено.' ;;
+    esac
+    sleep 1
+    SYNC_SECONDS=$((SYNC_SECONDS + 1))
+done
+[ "$SYNC_SECONDS" -lt 65 ] ||
+    fail 'Не дождались безопасного момента для замены TorrServer. Бинарник не изменён.'
+
+echo "Остановка TorrServer..."
+if service_running; then
+    WAS_RUNNING=1
+fi
+stop_and_verify ||
+    fail "Сервис продолжает работать после остановки. Бинарник НЕ заменён, резервная копия: $BACKUP"
+
+# Last safety check immediately before replacing the executable.
+service_running &&
+    fail "TorrServer запущен повторно перед заменой (возможен watchdog). Бинарник не изменён."
+
+echo "Замена бинарника..."
+if ! mv -f "$TMP" "$BIN"; then
+    rollback
+    fail "Ошибка замены бинарника"
+fi
+TMP=""
+
+echo "Запуск TorrServer..."
+"$SERVICE" start ||
+    echo 'Init-скрипт вернул ошибку запуска; проверяю фактическое состояние.'
+
+echo "Проверка работоспособности..."
+
+OK=0
+i=0
+
+while [ "$i" -lt 10 ]; do
+    sleep 2
+
+    RUNNING=$(version "$BIN")
+    HTTP_CODE=$(curl -s -o /dev/null \
+        -w '%{http_code}' \
+        --connect-timeout 2 --max-time 3 \
+        "$API_URL")
+
+    # HTTP 401 can mean the local /echo endpoint requires authentication.
+    # It still proves that an HTTP server is responding on this loopback port.
+    if [ "$RUNNING" = "$LATEST" ] &&
+       { [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; } &&
+       service_running; then
+        OK=1
+        break
+    fi
+
+    i=$((i + 1))
+done
+
+if [ "$OK" -ne 1 ]; then
+    echo "Новая версия не прошла проверку!"
+    rollback
+    fail "Обновление отменено"
+fi
+
+echo ""
+echo "================================"
+echo "TorrServer успешно обновлён!"
+echo "$CURRENT -> $LATEST"
+echo "API: HTTP $HTTP_CODE"
+echo "================================"
+ |
         head -n 1
 }
 
