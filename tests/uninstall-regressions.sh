@@ -210,4 +210,36 @@ printf '88\n1\n2\n\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-awg-clean.log
 [ ! -e /opt/etc/awg-manager ]
 grep -Fq 'VPN-ключи' /tmp/u-awg-clean.log
-echo 'Uninstall menu: cancel/remove/residue/watchdog/unknown-cron/Hydra tests passed.'
+# Prevent traversing mounted content during recursive cleanup.
+awk '/^u_cleanup_mount_guard\(\) \{/ {copy=1}
+     /^u_cleanup\(\) \{/ {copy=0}
+     copy {print}' install >/tmp/keenutils-audit-mount-functions.sh
+. /tmp/keenutils-audit-mount-functions.sh
+have() { command -v "$1" >/dev/null 2>&1; }
+err() { printf '%s\n' "$*" >&2; }
+mkdir -p /opt/etc/keenutils-audit-empty
+u_cleanup_mount_guard /opt/etc/keenutils-audit-empty
+if u_cleanup_mount_guard / >/tmp/keenutils-audit-root-mount.log 2>&1; then
+    echo 'Cleanup accepted a mounted root filesystem' >&2
+    exit 1
+fi
+rmdir /opt/etc/keenutils-audit-empty
+
+# A symlink to a foreign crontab must never be written or removed.
+awk '/^u_disable_watchdog\(\) \{/ {copy=1}
+     /^u_remove\(\) \{/ {copy=0}
+     copy {print}' install >/tmp/keenutils-audit-cron-functions.sh
+. /tmp/keenutils-audit-cron-functions.sh
+printf 'KEEP EXTERNAL CRON\n' >/tmp/keenutils-audit-cron-canary
+mv /opt/etc/crontab /tmp/keenutils-audit-cron-original
+ln -s /tmp/keenutils-audit-cron-canary /opt/etc/crontab
+if u_disable_watchdog >/tmp/keenutils-audit-symlink-cron.log 2>&1; then
+    echo 'Watchdog removal followed a crontab symlink' >&2
+    exit 1
+fi
+grep -Fxq 'KEEP EXTERNAL CRON' /tmp/keenutils-audit-cron-canary
+test -L /opt/etc/crontab
+rm -f /opt/etc/crontab
+mv /tmp/keenutils-audit-cron-original /opt/etc/crontab
+
+echo 'Uninstall menu: rollback, mountpoint safety, symlinks and existing regression tests passed.'
