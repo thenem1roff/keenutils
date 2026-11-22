@@ -17,6 +17,12 @@ SOURCES_CACHE=/opt/etc/keenutils/sources.conf
 SOURCES_READY=0
 mkdir -p /opt/etc/keenutils
 sources_validate ./sources.conf
+# Every source is mandatory, including Flashkeen.
+sed '/^flashkeen|/d' ./sources.conf >/tmp/keenutils-missing-flashkeen
+if sources_validate /tmp/keenutils-missing-flashkeen; then
+    echo 'Accepted a catalog without the required Flashkeen source' >&2
+    exit 1
+fi
 cp ./sources.conf /tmp/keenutils-valid-sources
 # A host outside the official repo must not be accepted.
 sed 's|https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/nfqws-menu.sh|https://evil.example/installer.sh|' \
@@ -116,4 +122,47 @@ grep -Fq 'FIRST INSTALL UMASK=0022' /tmp/keenutils-first-menu.log
 su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-first-install.list'
 rm -f /opt/etc/keenutils-first-install.list
 sources_validate "$SOURCES_CACHE"
-echo 'Source catalog, nfqws-menu permissions and return-navigation tests passed.'
+# A cached source catalog symlink must not be followed or overwritten.
+printf 'external data stays\n' >/tmp/keenutils-source-canary
+rm -f "$SOURCES_CACHE"
+ln -s /tmp/keenutils-source-canary "$SOURCES_CACHE"
+SOURCES_READY=0
+if sources_refresh >/tmp/keenutils-source-link.log 2>&1; then
+    echo 'Accepted symbolic-link sources.conf' >&2
+    exit 1
+fi
+grep -Fxq 'external data stays' /tmp/keenutils-source-canary
+test -L "$SOURCES_CACHE"
+rm -f "$SOURCES_CACHE"
+
+# New opkg feed files must be created atomically and must not follow links.
+awk '/^repo_add\(\) \{/ {copy=1}
+     /^fetch_and_run\(\) \{/ {copy=0}
+     copy {print}' install >/tmp/keenutils-test-repo-add.sh
+. /tmp/keenutils-test-repo-add.sh
+mkdir -p /opt/etc/opkg
+rm -f /opt/etc/opkg/keenutils-audit.conf
+ln -s /tmp/keenutils-source-canary /opt/etc/opkg/keenutils-audit.conf
+if repo_add keenutils-audit https://example.org/repo >/tmp/keenutils-feed-link.log 2>&1; then
+    echo 'Repo feed overwrote symlink' >&2
+    exit 1
+fi
+grep -Fxq 'external data stays' /tmp/keenutils-source-canary
+rm -f /opt/etc/opkg/keenutils-audit.conf
+repo_add keenutils-audit https://example.org/repo
+grep -Fxq 'src/gz keenutils-audit https://example.org/repo' /opt/etc/opkg/keenutils-audit.conf
+rm -f /opt/etc/opkg/keenutils-audit.conf
+
+# Do not execute an unrelated script behind a symlink named nfqws-menu.
+printf '#!/bin/sh\nprintf "FOREIGN MENU RAN\\n"\n' >/tmp/keenutils-foreign-menu
+rm -f /opt/nfqws-menu.sh
+ln -s /tmp/keenutils-foreign-menu /opt/nfqws-menu.sh
+if launch_nfqws_menu </dev/null >/tmp/keenutils-menu-symlink.log 2>&1; then
+    echo 'Executed foreign nfqws-menu symlink' >&2
+    exit 1
+fi
+test -L /opt/nfqws-menu.sh
+! grep -Fq 'FOREIGN MENU RAN' /tmp/keenutils-menu-symlink.log
+rm -f /opt/nfqws-menu.sh
+
+echo 'Source catalog, symlink-safe feeds and nfqws-menu delegation tests passed.'
