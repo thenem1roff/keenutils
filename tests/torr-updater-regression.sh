@@ -11,6 +11,18 @@ case "$1" in
     *) echo "Unexpected opkg action: $*" >&2; exit 90 ;;
 esac
 MOCK_OPKG
+# Simulate an Entware jq build without ONIGURUMA. This wrapper refuses
+# jq regex functions, while all supported JSON operations still work.
+cat >/opt/bin/jq <<'MOCK_NO_ONIGURUMA_JQ'
+#!/bin/sh
+case "$*" in
+    *'test('*|*'match('*|*'sub('*)
+        echo 'jq: compiled without ONIGURUMA regex library' >&2
+        exit 3 ;;
+esac
+exec /usr/bin/jq "$@"
+MOCK_NO_ONIGURUMA_JQ
+chmod 755 /opt/bin/jq
 cat >/opt/bin/uname <<'MOCK_UNAME'
 #!/bin/sh
 [ "$1" = '-m' ] && { echo aarch64; exit 0; }
@@ -59,7 +71,7 @@ case "$*" in
         digest=$(printf '#!/bin/sh\necho "github version %s"\n' "$stable" |
             sha256sum | awk '{print $1}')
         case "$stable" in
-            MatriX.147.2|MatriX.150)
+            MatriX.147.2|MatriX.150|MatriX.151)
                 printf '[\n  {\n    "tag_name": "Silo.2"\n  },\n  {\n    "tag_name": "%s",\n    "assets": [\n      {"name": "TorrServer-linux-arm64", "digest": "sha256:%s"}\n    ]\n  }\n]\n' "$stable" "$digest" ;;
             none)
                 printf '[\n  {\n    "tag_name": "Silo.2"\n  }\n]\n' ;;
@@ -153,7 +165,7 @@ chmod 755 /opt/bin/opkg /opt/bin/uname /opt/bin/date /opt/bin/sleep \
 
 cleanup() {
     rm -f /opt/bin/uname /opt/bin/date /opt/bin/sleep /opt/bin/pgrep \
-        /opt/bin/curl /opt/sbin/torrserver /opt/sbin/torrserver.backup \
+        /opt/bin/jq /opt/bin/curl /opt/sbin/torrserver /opt/sbin/torrserver.backup \
         /opt/etc/init.d/S90torrserver /tmp/keenutils-ts-running \
         /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest \
         /tmp/keenutils-ts-github-fail \
@@ -270,6 +282,26 @@ sh ./torrserver >/tmp/keenutils-ts-silo-skip.log 2>&1
 grep -Fq 'Доступна:    MatriX.150' /tmp/keenutils-ts-silo-skip.log
 grep -Fq 'TorrServer уже обновлён.' /tmp/keenutils-ts-silo-skip.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.150'
+
+# User case: the latest MatriX.151 is already installed. Even jq builds
+# without ONIGURUMA must report this as current, without downloading.
+reset_binary MatriX.151
+touch /tmp/keenutils-ts-running
+printf 'MatriX.151\n' >/tmp/keenutils-ts-latest
+sh ./torrserver >/tmp/keenutils-ts-151-current.log 2>&1
+grep -Fq 'Установлена: MatriX.151' /tmp/keenutils-ts-151-current.log
+grep -Fq 'Доступна:    MatriX.151' /tmp/keenutils-ts-151-current.log
+grep -Fq 'TorrServer уже обновлён.' /tmp/keenutils-ts-151-current.log
+test -f /tmp/keenutils-ts-running
+
+# A previous release also upgrades to MatriX.151 using its matching SHA-256.
+reset_binary MatriX.150
+touch /tmp/keenutils-ts-running
+sh ./torrserver >/tmp/keenutils-ts-151-update.log 2>&1
+grep -Fq 'MatriX.150 -> MatriX.151' /tmp/keenutils-ts-151-update.log
+grep -Fq 'SHA-256' /tmp/keenutils-ts-151-update.log
+/opt/sbin/torrserver --version | grep -Fq 'MatriX.151'
+test -f /tmp/keenutils-ts-running
 
 # MatriX.150 is newer than the available working MatriX.147.2.
 reset_binary MatriX.150

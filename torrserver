@@ -53,7 +53,10 @@ valid_version() {
 # GitHub /releases/latest points to an explicitly unfinished Silo rewrite.
 # Select the newest working MatriX release from the official releases list.
 latest_supported_release() {
-    jq -r '.[].tag_name | select(test("^MatriX[.][0-9]+([.][0-9]+)*$"))' "$1" |
+    # Entware jq may be compiled without ONIGURUMA. Decode JSON using jq;
+    # verify tags with grep ERE instead of jq's regex functions.
+    jq -r '.[].tag_name' "$1" |
+        grep -E '^MatriX\.[0-9]+(\.[0-9]+)*$' |
         head -n 1
 }
 
