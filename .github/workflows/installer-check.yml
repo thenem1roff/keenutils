@@ -108,7 +108,7 @@ jobs:
         run: |
           set -eu
           sudo mkdir -p /opt/etc/init.d /opt/bin
-          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
+          printf '#!/bin/sh\n# KeenUtils TorrServer watchdog v2\nexit 0\n' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
           sudo chmod 755 /opt/bin/torr_watchdog.sh
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S90torrserver >/dev/null
