@@ -212,18 +212,19 @@ done
 
 [ -s "$TMP" ] || fail "Скачанный файл пуст"
 
-chmod 755 "$TMP" || fail "Ошибка chmod"
-
-DOWNLOADED=$(version "$TMP")
-
-[ "$DOWNLOADED" = "$LATEST" ] ||
-    fail "Версия скачанного файла не совпадает: $DOWNLOADED"
+# Never execute unverified downloaded bytes, even just to ask --version.
+# Verify the official SHA-256 BEFORE chmod/launching the asset as root.
 ACTUAL_SHA256=$(sha256sum "$TMP" | awk '{print $1}') ||
     fail 'Не удалось вычислить SHA-256 загруженного файла'
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] ||
     fail 'Контрольная сумма скачанного TorrServer не совпадает с официальным релизом'
 
-echo "Бинарник проверен: $DOWNLOADED, SHA-256 подтверждён"
+chmod 755 "$TMP" || fail "Ошибка chmod"
+DOWNLOADED=$(version "$TMP")
+[ "$DOWNLOADED" = "$LATEST" ] ||
+    fail "Версия скачанного файла не совпадает: $DOWNLOADED"
+
+echo "Бинарник проверен: SHA-256 и версия $DOWNLOADED подтверждены"
 
 # Keep a complete backup on the same filesystem. Never truncate a previous
 # valid backup if copying the installed binary fails.
