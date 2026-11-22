@@ -85,6 +85,22 @@ jobs:
           grep -q 'уже актуален' /tmp/keenutils-noop.log
           grep -q 'Выход.' /tmp/keenutils-noop.log
           cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
+      - name: KeenUtils update refuses unsafe symlink backups
+        run: |
+          set -eu
+          printf '\n# audit-update-pending\n' | sudo tee -a /opt/bin/keenutils >/dev/null
+          printf 'DO NOT OVERWRITE\n' > /tmp/keenutils-audit-backup-canary
+          sudo rm -f /opt/bin/keenutils.backup
+          sudo ln -s /tmp/keenutils-audit-backup-canary /opt/bin/keenutils.backup
+          printf '99\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-audit-update-link.log
+          grep -Fq 'занят ссылкой' /tmp/keenutils-audit-update-link.log
+          grep -Fxq 'DO NOT OVERWRITE' /tmp/keenutils-audit-backup-canary
+          grep -Fq '# audit-update-pending' /opt/bin/keenutils
+          sudo rm -f /opt/bin/keenutils.backup
+          printf '99\n\n\n00\n' |
+            script -q -c 'sudo /opt/bin/keenutils' /dev/null > /tmp/keenutils-audit-update-recovered.log
+          cmp -s /tmp/keenutils-ci-source /opt/bin/keenutils
       - name: TorrServer submenu navigation and independent actions
         run: |
           set -eu
@@ -108,7 +124,7 @@ jobs:
         run: |
           set -eu
           sudo mkdir -p /opt/etc/init.d /opt/bin
-          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
+          printf '#!/bin/sh\n# KeenUtils TorrServer watchdog v2\nexit 0\n' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
           sudo chmod 755 /opt/bin/torr_watchdog.sh
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
           printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S90torrserver >/dev/null
@@ -118,17 +134,69 @@ jobs:
           sudo sh ./torr_watchdog | grep -q 'уже установлен'
           after="$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
           test "$before" = "$after"
-          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\nexit 0')"
+          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\n# KeenUtils TorrServer watchdog v2\nexit 0')"
           # Existing cron without a trailing newline must be repaired safely.
           printf '* * * * * root /opt/bin/torr_watchdog.sh' | sudo tee /opt/etc/crontab >/dev/null
           sudo sh ./torr_watchdog | grep -q 'Проверка успешна'
           test "$(grep -Fxc '* * * * * root /opt/bin/torr_watchdog.sh' /opt/etc/crontab)" = 1
           test "$(grep -Fxc '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab)" = 1
-          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\nexit 0')"
+          test "$(cat /opt/bin/torr_watchdog.sh)" = "$(printf '#!/bin/sh\n# KeenUtils TorrServer watchdog v2\nexit 0')"
           repaired="$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
           sudo sh ./torr_watchdog | grep -q 'уже установлен'
           test "$repaired" = "$(sha256sum /opt/etc/crontab | cut -d ' ' -f 1)"
 
+      - name: Watchdog keeps authenticated TorrServer alive (HTTP 401)
+        run: |
+          set -eu
+          awk '/^cat > .*WATCHDOG_SCRIPT/ {inside=1;next}
+               /^WATCHDOG_SCRIPT$/ {inside=0}
+               inside {print}' torr_watchdog > /tmp/keenutils-watchdog-audit.sh
+          grep -Fq '# KeenUtils TorrServer watchdog v2' /tmp/keenutils-watchdog-audit.sh
+          sudo mkdir -p /opt/bin
+          cat <<'MOCK_HTTP401' | sudo tee /opt/bin/curl >/dev/null
+          #!/bin/sh
+          printf '401'
+          MOCK_HTTP401
+          cat <<'MOCK_PGREP' | sudo tee /opt/bin/pgrep >/dev/null
+          #!/bin/sh
+          test "$1" = '-x' && test "$2" = torrserver
+          MOCK_PGREP
+          cat <<'MOCK_KILLALL' | sudo tee /opt/bin/killall >/dev/null
+          #!/bin/sh
+          touch /tmp/keenutils-watchdog-killed
+          MOCK_KILLALL
+          sudo chmod 755 /opt/bin/curl /opt/bin/pgrep /opt/bin/killall
+          sudo rm -f /tmp/keenutils-watchdog-killed
+          sudo env PATH=/opt/bin:/usr/bin:/bin sh /tmp/keenutils-watchdog-audit.sh
+          test ! -e /tmp/keenutils-watchdog-killed
+          sudo rm -f /opt/bin/curl /opt/bin/pgrep /opt/bin/killall
+      - name: Watchdog upgrade rolls back after Cron restart failure
+        run: |
+          set -eu
+          cat <<'OLD_WATCHDOG' | sudo tee /opt/bin/torr_watchdog.sh >/dev/null
+          #!/bin/sh
+          LOG_FILE="/opt/var/log/torr_watchdog.log"
+          LOCK_DIR="/tmp/torr_watchdog.lock"
+          # Прежний способ восстановления при зависании TorrServer.
+          exit 0
+          OLD_WATCHDOG
+          sudo chmod 755 /opt/bin/torr_watchdog.sh
+          sudo cp /opt/bin/torr_watchdog.sh /tmp/keenutils-audit-old-watchdog
+          printf '* * * * * root /opt/bin/torr_watchdog.sh\n' | sudo tee /opt/etc/crontab >/dev/null
+          sudo cp /opt/etc/crontab /tmp/keenutils-audit-old-crontab
+          printf '#!/bin/sh\nexit 1\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
+          sudo chmod 755 /opt/etc/init.d/S10cron
+          if sudo sh ./torr_watchdog > /tmp/keenutils-audit-cron-failure.log 2>&1; then
+            echo 'Watchdog accepted a failed Cron restart' >&2
+            exit 1
+          fi
+          grep -Fq 'Прежние Cron и watchdog восстановлены' /tmp/keenutils-audit-cron-failure.log
+          cmp /tmp/keenutils-audit-old-watchdog /opt/bin/torr_watchdog.sh
+          cmp /tmp/keenutils-audit-old-crontab /opt/etc/crontab
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/etc/init.d/S10cron >/dev/null
+          sudo sh ./torr_watchdog > /tmp/keenutils-audit-cron-recovered.log
+          grep -Fq '# KeenUtils TorrServer watchdog v2' /opt/bin/torr_watchdog.sh
+          grep -Fqx '* * * * * root sleep 30 && /opt/bin/torr_watchdog.sh' /opt/etc/crontab
       - name: Entware status and confirmation regression tests
         run: sh tests/installer-regressions.sh
       - name: TorrServer cache settings and mount regression tests

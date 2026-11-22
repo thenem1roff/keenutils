@@ -53,8 +53,7 @@ valid_version() {
 # GitHub /releases/latest points to an explicitly unfinished Silo rewrite.
 # Select the newest working MatriX release from the official releases list.
 latest_supported_release() {
-    sed -n 's/^[[:space:]]*"tag_name": *"\([^"]*\)".*/\1/p' "$1" |
-        grep -E '^MatriX\.[0-9]+(\.[0-9]+)*$' |
+    jq -r '.[].tag_name | select(test("^MatriX[.][0-9]+([.][0-9]+)*$"))' "$1" |
         head -n 1
 }
 
@@ -117,6 +116,8 @@ ensure_command date coreutils-date
 ensure_command sleep coreutils-sleep
 ensure_command rm coreutils-rm
 ensure_command pgrep procps-ng-pgrep
+ensure_command jq jq
+ensure_command sha256sum coreutils-sha256sum
 
 CURRENT=$(version "$BIN")
 valid_version "$CURRENT" ||
@@ -171,6 +172,19 @@ fi
 
 echo "Обновление: $CURRENT -> $LATEST"
 
+# GitHub's release asset includes its SHA-256. Verify the exact asset from
+# the selected MatriX release, not the first unrelated asset/digest.
+EXPECTED_DIGEST=$(jq -er --arg tag "$LATEST" '
+    .[] | select(.tag_name == $tag) |
+    .assets[]? | select(.name == "TorrServer-linux-arm64") | .digest |
+    select(type == "string")
+' "$RELEASE_TMP") ||
+    fail 'Нет контрольной суммы ARM64-бинарника в метаданных релиза'
+case "$EXPECTED_DIGEST" in sha256:*) : ;; *) fail 'Неверный формат контрольной суммы релиза' ;; esac
+EXPECTED_SHA256=${EXPECTED_DIGEST#sha256:}
+printf '%s\n' "$EXPECTED_SHA256" | grep -Eq '^[0-9a-f]{64}$' ||
+    fail 'Некорректная контрольная сумма релиза'
+
 TMP=$(mktemp /opt/sbin/.torrserver.XXXXXX) ||
     fail "Не удалось создать временный файл"
 
@@ -198,14 +212,19 @@ done
 
 [ -s "$TMP" ] || fail "Скачанный файл пуст"
 
+# Never execute unverified downloaded bytes, even just to ask --version.
+# Verify the official SHA-256 BEFORE chmod/launching the asset as root.
+ACTUAL_SHA256=$(sha256sum "$TMP" | awk '{print $1}') ||
+    fail 'Не удалось вычислить SHA-256 загруженного файла'
+[ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] ||
+    fail 'Контрольная сумма скачанного TorrServer не совпадает с официальным релизом'
+
 chmod 755 "$TMP" || fail "Ошибка chmod"
-
 DOWNLOADED=$(version "$TMP")
-
 [ "$DOWNLOADED" = "$LATEST" ] ||
     fail "Версия скачанного файла не совпадает: $DOWNLOADED"
 
-echo "Бинарник проверен: $DOWNLOADED"
+echo "Бинарник проверен: SHA-256 и версия $DOWNLOADED подтверждены"
 
 # Keep a complete backup on the same filesystem. Never truncate a previous
 # valid backup if copying the installed binary fails.
@@ -270,14 +289,20 @@ rollback() {
 }
 
 echo "Ожидание безопасного момента..."
-
-while :; do
-    SEC=$(date +%S)
+# Avoid hanging indefinitely if the router clock/date command is broken.
+SYNC_SECONDS=0
+while [ "$SYNC_SECONDS" -lt 65 ]; do
+    SEC=$(date +%S) || fail 'Не удалось прочитать секунды системных часов'
     case "$SEC" in
         03|33) break ;;
+        [0-5][0-9]) : ;;
+        *) fail 'Системное время некорректно. Безопасное обновление отменено.' ;;
     esac
     sleep 1
+    SYNC_SECONDS=$((SYNC_SECONDS + 1))
 done
+[ "$SYNC_SECONDS" -lt 65 ] ||
+    fail 'Не дождались безопасного момента для замены TorrServer. Бинарник не изменён.'
 
 echo "Остановка TorrServer..."
 if service_running; then

@@ -18,7 +18,11 @@ exec /usr/bin/uname "$@"
 MOCK_UNAME
 cat >/opt/bin/date <<'MOCK_DATE'
 #!/bin/sh
-[ "$1" = '+%S' ] && { echo 03; exit 0; }
+[ "$1" = '+%S' ] && {
+    if [ -f /tmp/keenutils-ts-invalid-clock ]; then echo invalid; exit 0; fi
+    echo 03
+    exit 0
+}
 exec /usr/bin/date "$@"
 MOCK_DATE
 cat >/opt/bin/sleep <<'MOCK_SLEEP'
@@ -52,9 +56,11 @@ case "$*" in
         # The first release is the explicitly unfinished Silo rewrite.
         # The updater must select the newest production MatriX release.
         stable=$(cat /tmp/keenutils-ts-latest)
+        digest=$(printf '#!/bin/sh\necho "github version %s"\n' "$stable" |
+            sha256sum | awk '{print $1}')
         case "$stable" in
             MatriX.147.2|MatriX.150)
-                printf '[\n  {\n    "tag_name": "Silo.2"\n  },\n  {\n    "tag_name": "%s"\n  }\n]\n' "$stable" ;;
+                printf '[\n  {\n    "tag_name": "Silo.2"\n  },\n  {\n    "tag_name": "%s",\n    "assets": [\n      {"name": "TorrServer-linux-arm64", "digest": "sha256:%s"}\n    ]\n  }\n]\n' "$stable" "$digest" ;;
             none)
                 printf '[\n  {\n    "tag_name": "Silo.2"\n  }\n]\n' ;;
             *) exit 2 ;;
@@ -91,6 +97,10 @@ case "$*" in
             fi
         else
             printf '#!/bin/sh\necho "github version %s"\n' "$tag" >"$dest"
+        fi
+        if [ -f /tmp/keenutils-ts-corrupt-digest ]; then
+            # Even querying --version would execute this side effect.
+            printf '\ntouch /tmp/keenutils-ts-tampered-executed\n' >> "$dest"
         fi
         ;;
     *127.0.0.1:8090/echo*)
@@ -147,7 +157,9 @@ cleanup() {
         /opt/etc/init.d/S90torrserver /tmp/keenutils-ts-running \
         /tmp/keenutils-ts-mode /tmp/keenutils-ts-latest \
         /tmp/keenutils-ts-github-fail \
-        /tmp/keenutils-ts-partial-once /tmp/keenutils-ts-transfer-started
+        /tmp/keenutils-ts-partial-once /tmp/keenutils-ts-transfer-started \
+        /tmp/keenutils-ts-corrupt-digest /tmp/keenutils-ts-invalid-clock \
+        /tmp/keenutils-ts-tampered-executed
 }
 trap cleanup EXIT
 
@@ -285,4 +297,37 @@ fi
 grep -Fq 'Не найден проверенный релиз MatriX' /tmp/keenutils-ts-no-stable.log
 /opt/sbin/torrserver --version | grep -Fq 'MatriX.141'
 
-echo 'TorrServer updater: service safety, rollback, API, auth, production MatriX selection and experimental Silo exclusions passed.'
+# A broken clock must never leave the updater spinning indefinitely,
+# and must never stop/replace the running server.
+reset_binary MatriX.141
+touch /tmp/keenutils-ts-running
+printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
+echo normal >/tmp/keenutils-ts-mode
+touch /tmp/keenutils-ts-invalid-clock
+if sh ./torrserver >/tmp/keenutils-ts-clock-fail.log 2>&1; then
+    echo 'Updater accepted an invalid router clock' >&2; exit 1
+fi
+grep -Fq 'Системное время некорректно' /tmp/keenutils-ts-clock-fail.log
+/opt/sbin/torrserver --version | grep -Fq MatriX.141
+test -f /tmp/keenutils-ts-running
+rm -f /tmp/keenutils-ts-invalid-clock
+
+# A downloaded executable may report the correct version but have
+# unexpected bytes. Reject before stopping or replacing the existing daemon.
+reset_binary MatriX.141
+touch /tmp/keenutils-ts-running
+echo normal >/tmp/keenutils-ts-mode
+printf 'MatriX.147.2\n' >/tmp/keenutils-ts-latest
+rm -f /tmp/keenutils-ts-tampered-executed
+touch /tmp/keenutils-ts-corrupt-digest
+if sh ./torrserver >/tmp/keenutils-ts-bad-hash.log 2>&1; then
+    echo 'Tampered TorrServer passed official SHA-256 verification' >&2
+    exit 1
+fi
+grep -Fq 'Контрольная сумма' /tmp/keenutils-ts-bad-hash.log
+test ! -e /tmp/keenutils-ts-tampered-executed
+/opt/sbin/torrserver --version | grep -Fq MatriX.141
+test -f /tmp/keenutils-ts-running
+rm -f /tmp/keenutils-ts-corrupt-digest
+
+echo 'TorrServer updater: SHA-256, rollback, API, auth, clock and MatriX tests passed.'
