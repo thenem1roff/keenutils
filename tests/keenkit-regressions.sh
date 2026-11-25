@@ -94,5 +94,48 @@ grep -Fq 'Выход.' /tmp/keenutils-kit-first.log
 [ "$(readlink /opt/bin/keenkit)" = /opt/keenkit.sh ]
 su -s /bin/sh nobody -c 'test -r /opt/etc/keenutils-kit-test.txt'
 
+# Batch with already-installed KeenKit must NOT open its interactive menu.
+printf '77\n5\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-kit-batch-installed.log
+grep -Fq 'KeenKit уже установлен. Автозапуск меню пропущен.' /tmp/keenutils-kit-batch-installed.log
+! grep -Fq 'KEENKIT MENU OPENED' /tmp/keenutils-kit-batch-installed.log
+grep -Fq 'Очередь завершена без обнаруженных ошибок.' /tmp/keenutils-kit-batch-installed.log
+
+# First-install batch uses the official installer body, but strips only the
+# precise final exec statement which otherwise hijacks the queue.
+rm -f /opt/keenkit.sh /opt/bin/keenkit
+cat >/tmp/keenutils-kit-installer-fixture <<'MOCK_BATCH_INSTALL'
+#!/bin/sh
+OPT_DIR=/opt
+SCRIPT=keenkit.sh
+printf 'KEENKIT UPSTREAM INSTALLER\n'
+cat >/opt/keenkit.sh <<'NEW_KIT'
+#!/bin/sh
+printf 'KEENKIT MENU OPENED\n'
+NEW_KIT
+chmod 755 /opt/keenkit.sh
+ln -s /opt/keenkit.sh /opt/bin/keenkit
+exec $OPT_DIR/$SCRIPT
+MOCK_BATCH_INSTALL
+printf '77\n5\n\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-kit-batch-first.log
+grep -Fq 'KEENKIT UPSTREAM INSTALLER' /tmp/keenutils-kit-batch-first.log
+grep -Fq 'KeenKit установлен в /opt/keenkit.sh' /tmp/keenutils-kit-batch-first.log
+! grep -Fq 'KEENKIT MENU OPENED' /tmp/keenutils-kit-batch-first.log
+test -f /opt/keenkit.sh
+test -L /opt/bin/keenkit
+grep -Fq 'Очередь завершена без обнаруженных ошибок.' /tmp/keenutils-kit-batch-first.log
+
+# If upstream changes the final exec, do not rewrite unknown installer code.
+rm -f /opt/keenkit.sh /opt/bin/keenkit
+sed 's|exec \$OPT_DIR/\$SCRIPT|exec sh /opt/keenkit.sh|' \
+    /tmp/keenutils-kit-installer-fixture >/tmp/keenutils-kit-changed-installer
+cp /tmp/keenutils-kit-changed-installer /tmp/keenutils-kit-installer-fixture
+printf '77\n5\n\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-kit-batch-unknown.log
+grep -Fq 'KeenKit изменил запуск установщика' /tmp/keenutils-kit-batch-unknown.log
+grep -Fq 'Ошибки в пунктах: 5' /tmp/keenutils-kit-batch-unknown.log
+test ! -e /opt/keenkit.sh
+
 rm -f /opt/keenkit.sh /opt/bin/keenkit /opt/etc/keenutils-kit-test.txt
-echo 'KeenKit: installed launch, first install, return, file access, umask and corrupt-file protection OK.'
+echo 'KeenKit: manual UI, batch no-launch (installed and first-time), upstream safety and permissions OK.'

@@ -72,6 +72,12 @@ printf '4\n00\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-menu.log
 grep -Fq 'UPSTREAM NFQWS MENU OPENED' /tmp/keenutils-nfqws-menu.log
 grep -Fq 'UPSTREAM EXIT=00' /tmp/keenutils-nfqws-menu.log
+# Batch queue must install or verify nfqws-menu without running its UI.
+printf '77\n4\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-batch-present.log
+grep -Fq 'nfqws-menu установлен и проверен. Автозапуск меню пропущен.' /tmp/keenutils-nfqws-batch-present.log
+! grep -Fq 'UPSTREAM NFQWS MENU OPENED' /tmp/keenutils-nfqws-batch-present.log
+grep -Fq 'Очередь завершена без обнаруженных ошибок.' /tmp/keenutils-nfqws-batch-present.log
 grep -Fq '  4. nfqws-menu' /tmp/keenutils-nfqws-menu.log
 grep -Fq '  8. TorrServer' /tmp/keenutils-nfqws-menu.log
 grep -Fq 'Выход.' /tmp/keenutils-nfqws-menu.log
@@ -116,6 +122,15 @@ chmod 755 /opt/bin/wget
 printf '4\n\n\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/keenutils-first-menu.log
 grep -q 'UPSTREAM FIRST INSTALL OK' /tmp/keenutils-first-menu.log
+# New upstream menu installation from the queue must download and save
+# the same file without executing it.
+rm -f /opt/nfqws-menu.sh
+printf '77\n4\n\n\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/keenutils-nfqws-batch-first.log
+test -s /opt/nfqws-menu.sh
+grep -Fq 'nfqws-menu установлен и проверен. Автозапуск меню пропущен.' /tmp/keenutils-nfqws-batch-first.log
+! grep -Fq 'UPSTREAM FIRST INSTALL OK' /tmp/keenutils-nfqws-batch-first.log
+grep -Fq 'Очередь завершена без обнаруженных ошибок.' /tmp/keenutils-nfqws-batch-first.log
 grep -Fq 'Выход.' /tmp/keenutils-first-menu.log
 grep -Fq 'FIRST INSTALL UMASK=0022' /tmp/keenutils-first-menu.log
 [ -s /opt/nfqws-menu.sh ]

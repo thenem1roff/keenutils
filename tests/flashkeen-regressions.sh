@@ -34,6 +34,16 @@ grep -q 'FLASHKEEN MENU umask=0022' "$root/first.log"
 install_flashkeen >"$root/second.log"
 grep -q 'FLASHKEEN MENU' "$root/second.log"
 [ "$(wc -l <"$root/calls" | tr -d ' ')" -eq 1 ]
+# Batch skips menu both on existing installation and first installation.
+install_flashkeen install_only >"$root/batch-present.log"
+grep -Fq 'Автозапуск меню пропущен' "$root/batch-present.log"
+! grep -Fq 'FLASHKEEN MENU' "$root/batch-present.log"
+[ "$(wc -l <"$root/calls" | tr -d ' ')" -eq 1 ]
+rm -f "$root/opt/bin/flashkeen"
+install_flashkeen install_only >"$root/batch-first.log"
+grep -Fq 'Автозапуск меню пропущен' "$root/batch-first.log"
+! grep -Fq 'FLASHKEEN MENU' "$root/batch-first.log"
+[ "$(wc -l <"$root/calls" | tr -d ' ')" -eq 2 ]
 u_detect flashkeen
 [ "$U_INSTALLED" -eq 1 ]
 
