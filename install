@@ -1723,6 +1723,89 @@ uninstall_menu() {
     done
 }
 
+# One dispatcher shared by manual installation and the queued installer.
+# TorrServer's menu item 1 and the queue both use the same setup wizard.
+install_selected_program() {
+    case "$1" in
+        1) install_nfqws ;;
+        2) install_nfqws2 ;;
+        3) install_nfqws_web ;;
+        4) launch_nfqws_menu ;;
+        5) install_keenkit ;;
+        6) install_hydra ;;
+        7) install_awg ;;
+        8) install_torrserver_wizard ;;
+        9) install_flashkeen ;;
+        *) err 'Неизвестный номер программы.'; return 1 ;;
+    esac
+}
+
+install_program_label() {
+    case "$1" in
+        1) say 'nfqws' ;;
+        2) say 'nfqws2' ;;
+        3) say 'nfqws-web' ;;
+        4) say 'nfqws-menu' ;;
+        5) say 'KeenKit' ;;
+        6) say 'HydraRoute Neo' ;;
+        7) say 'AWG Manager' ;;
+        8) say 'TorrServer' ;;
+        9) say 'Flashkeen' ;;
+    esac
+}
+
+# Keep a batch separate from the main menu's variables and shell settings.
+# Existing application functions are invoked without rewriting their prompts.
+auto_install_programs() (
+    say 'Введите номера программ от 1 до 9 через пробел.'
+    say 'Например: 2 3 4 7 8. Порядок выполнения — как введено.'
+    printf 'Программы (Enter — отмена): '
+    IFS= read -r AUTO_INPUT || return 0
+    [ -n "$AUTO_INPUT" ] || { say 'Автоустановка отменена.'; return 0; }
+    # Reject the entire list before installing anything. No eval and no
+    # extra symbols, options, menu commands or arbitrary shell expressions.
+    if ! printf '%s\n' "$AUTO_INPUT" |
+        awk 'NF == 0 {exit 1} {for (i=1; i<=NF; i++) if ($i !~ /^[1-9]$/) exit 1}'; then
+        err 'Укажите только номера 1–9, разделённые пробелами.'
+        return 1
+    fi
+    AUTO_QUEUE=''
+    AUTO_SEEN=' '
+    for AUTO_ITEM in $AUTO_INPUT; do
+        case "$AUTO_SEEN" in
+            *" $AUTO_ITEM "*) say "Номер $AUTO_ITEM повторяется — пропускаю дубль." ;;
+            *)
+                AUTO_QUEUE="$AUTO_QUEUE $AUTO_ITEM"
+                AUTO_SEEN="$AUTO_SEEN$AUTO_ITEM "
+                ;;
+        esac
+    done
+    AUTO_TOTAL=0
+    for AUTO_ITEM in $AUTO_QUEUE; do AUTO_TOTAL=$((AUTO_TOTAL + 1)); done
+    AUTO_STEP=0
+    AUTO_FAILED=''
+    say "Очередь: $AUTO_QUEUE"
+    say 'Для каждого пункта останутся штатные вопросы установщика.'
+    for AUTO_ITEM in $AUTO_QUEUE; do
+        AUTO_STEP=$((AUTO_STEP + 1))
+        say ''
+        say "========== [$AUTO_STEP/$AUTO_TOTAL] $(install_program_label "$AUTO_ITEM") =========="
+        if install_selected_program "$AUTO_ITEM"; then
+            say "Пункт $AUTO_ITEM: действие завершено."
+        else
+            err "Пункт $AUTO_ITEM завершился с ошибкой. Перехожу к следующему."
+            AUTO_FAILED="$AUTO_FAILED $AUTO_ITEM"
+        fi
+    done
+    say ''
+    if [ -n "$AUTO_FAILED" ]; then
+        err "Очередь завершена. Ошибки в пунктах:$AUTO_FAILED"
+        say 'Остальные выбранные пункты были выполнены по порядку.'
+        return 1
+    fi
+    say 'Очередь завершена без обнаруженных ошибок.'
+)
+
 # Compact status header. Local status is refreshed on each main-menu redraw.
 ROUTER_MODEL='Keenetic'
 KEENUTILS_UPDATE_STATE='unknown'
@@ -1851,6 +1934,7 @@ menu() {
     say '  9. Flashkeen'
     say ''
     say '=============== Утилиты ================'
+    say ' 77. Автоустановка программ'
     say ' 88. Удаление программ'
     say ' 99. Обновить KeenUtils'
     say ' 00. Выход'
@@ -1863,15 +1947,16 @@ while :; do
     menu
     IFS= read -r choice || break
     case "$choice" in
-        1|01) install_nfqws ;;
-        2|02) install_nfqws2 ;;
-        3|03) install_nfqws_web ;;
-        4|04) launch_nfqws_menu ;;
-        5|05) install_keenkit ;;
-        6|06) install_hydra ;;
-        7|07) install_awg ;;
+        1|01) install_selected_program 1 ;;
+        2|02) install_selected_program 2 ;;
+        3|03) install_selected_program 3 ;;
+        4|04) install_selected_program 4 ;;
+        5|05) install_selected_program 5 ;;
+        6|06) install_selected_program 6 ;;
+        7|07) install_selected_program 7 ;;
         8|08) torrserver_menu; continue ;;
-        9|09) install_flashkeen ;;
+        9|09) install_selected_program 9 ;;
+        77) auto_install_programs ;;
         88) uninstall_menu; continue ;;
         99) update_keenutils
             if [ "$KEENUTILS_UPDATED" -eq 1 ]; then
