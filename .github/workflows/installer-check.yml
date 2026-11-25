@@ -24,8 +24,7 @@ on:
       - torr_watchdog
       - torrserver
       - sources.conf
-      - tests/sources-regression.sh
-      - tests/flashkeen-regressions.sh
+      - tests/**
       - .github/workflows/installer-check.yml
 jobs:
   shell:
