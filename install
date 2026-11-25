@@ -421,7 +421,24 @@ fetch_and_run() {
         { err 'Не удалось скачать установщик.'; return 1; }
     sh -n "$fetch_temp" ||
         { err 'Скрипт содержит ошибку синтаксиса sh.'; return 1; }
-    sh "$fetch_temp"
+    # KeenKit's official install.sh ends with an unconditional exec of
+    # its interactive menu. In batch mode only, remove precisely that final
+    # launch; all preceding upstream installation commands still run.
+    # Fail closed when the upstream entry point changes instead of silently
+    # opening a blocking menu or rewriting other commands.
+    if [ "$fetch_key" = keenkit ] && [ "${3:-}" = install_only ]; then
+        if [ "$(tail -n 1 "$fetch_temp")" != 'exec $OPT_DIR/$SCRIPT' ]; then
+            err 'KeenKit изменил запуск установщика. Автоустановка остановлена, используйте ручной пункт 5.'
+            return 1
+        fi
+        sed '$d' "$fetch_temp" > "$fetch_temp.install_only" || return 1
+        TMP_FILES="$TMP_FILES $fetch_temp.install_only"
+        sh -n "$fetch_temp.install_only" ||
+            { err 'Установщик KeenKit без автозапуска не прошёл проверку.'; return 1; }
+        sh "$fetch_temp.install_only"
+    else
+        sh "$fetch_temp"
+    fi
 }
 install_nfqws() {
     if pkg_installed nfqws-keenetic; then say 'nfqws уже установлен.'; return 0; fi
@@ -493,6 +510,10 @@ launch_nfqws_menu() {
             return 1
         fi
     fi
+    if [ "${1:-}" = install_only ]; then
+        say 'nfqws-menu установлен и проверен. Автозапуск меню пропущен.'
+        return 0
+    fi
     # The upstream menu replaces nfqws hostlists and blobs. These must be
     # readable by the nfqws daemon (which drops privileges to nobody).
     # Keep KeenUtils' restrictive umask 077 outside this subprocess.
@@ -519,6 +540,10 @@ install_flashkeen() {
        ! sh -n "$fk_target"; then
         err 'Flashkeen не найден или повреждён. Не запускаю и не перезаписываю.'
         return 1
+    fi
+    if [ "${1:-}" = install_only ]; then
+        say 'Flashkeen установлен и проверен. Автозапуск меню пропущен.'
+        return 0
     fi
     say 'Запуск Flashkeen.'
     (
@@ -570,6 +595,10 @@ install_keenkit() {
     if [ -f "$kk_target" ] && [ -e /opt/bin/keenkit ]; then
         [ -s "$kk_target" ] && sh -n "$kk_target" ||
             { err 'Установленный KeenKit повреждён. Не запускаю и не перезаписываю.'; return 1; }
+        if [ "${1:-}" = install_only ]; then
+            say 'KeenKit уже установлен. Автозапуск меню пропущен.'
+            return 0
+        fi
         say 'Запуск уже установленного KeenKit.'
         # Run as a child: KeenKit's exit/exec stays within that child, so
         # choosing 00 returns to the KeenUtils main menu.
@@ -579,11 +608,11 @@ install_keenkit() {
         )
         return $?
     fi
-    # Upstream install.sh already execs keenkit.sh after installation.
-    # Delegate in a child so 00 returns here, without launching twice.
+    # The official installer launches the KeenKit menu with exec after
+    # installation. For batch mode, suppress only that final launch.
     (
         umask 022
-        fetch_and_run keenkit KeenKit
+        fetch_and_run keenkit KeenKit "${1:-}"
     ) || return 1
     if [ -f "$kk_target" ] && [ -e /opt/bin/keenkit ]; then
         say 'KeenKit установлен в /opt/keenkit.sh и /opt/bin/keenkit.'
@@ -1730,12 +1759,12 @@ install_selected_program() {
         1) install_nfqws ;;
         2) install_nfqws2 ;;
         3) install_nfqws_web ;;
-        4) launch_nfqws_menu ;;
-        5) install_keenkit ;;
+        4) launch_nfqws_menu "${2:-}" ;;
+        5) install_keenkit "${2:-}" ;;
         6) install_hydra ;;
         7) install_awg ;;
         8) install_torrserver_wizard ;;
-        9) install_flashkeen ;;
+        9) install_flashkeen "${2:-}" ;;
         *) err 'Неизвестный номер программы.'; return 1 ;;
     esac
 }
@@ -1790,7 +1819,7 @@ auto_install_programs() (
         AUTO_STEP=$((AUTO_STEP + 1))
         say ''
         say "========== [$AUTO_STEP/$AUTO_TOTAL] $(install_program_label "$AUTO_ITEM") =========="
-        if install_selected_program "$AUTO_ITEM"; then
+        if install_selected_program "$AUTO_ITEM" install_only; then
             say "Пункт $AUTO_ITEM: действие завершено."
         else
             err "Пункт $AUTO_ITEM завершился с ошибкой. Перехожу к следующему."
