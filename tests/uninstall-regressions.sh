@@ -210,6 +210,24 @@ printf '88\n1\n2\n\n\n0\n0\n00\n' |
     script -q -c 'sh ./install' /dev/null >/tmp/u-awg-clean.log
 [ ! -e /opt/etc/awg-manager ]
 grep -Fq 'VPN-ключи' /tmp/u-awg-clean.log
+# AWG Manager 2.21 ships the separate dependent awgmautolist package.
+# Refusing the satellite removal must preserve both packages.
+printf 'awg-manager\nawgmautolist\n' >/tmp/keenutils-uninstall-pkgs
+: >/tmp/keenutils-uninstall-log
+printf '88\n1\n1\nn\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-awg-satellite-cancel.log
+grep -Fq 'Удалить также зависимый пакет awgmautolist?' /tmp/u-awg-satellite-cancel.log
+grep -Fxq awg-manager /tmp/keenutils-uninstall-pkgs
+grep -Fxq awgmautolist /tmp/keenutils-uninstall-pkgs
+test ! -s /tmp/keenutils-uninstall-log
+# Explicit consent removes only the named satellite, then AWG Manager.
+printf '88\n1\n1\ny\ny\n\n0\n0\n00\n' |
+    script -q -c 'sh ./install' /dev/null >/tmp/u-awg-satellite-remove.log
+printf 'remove awgmautolist\nremove awg-manager\n' >/tmp/u-awg-satellite-expected
+cmp /tmp/u-awg-satellite-expected /tmp/keenutils-uninstall-log
+test ! -s /tmp/keenutils-uninstall-pkgs
+grep -Fq 'удаляет управляемые туннели' /tmp/u-awg-satellite-remove.log
+
 # Prevent traversing mounted content during recursive cleanup.
 awk '/^u_cleanup_mount_guard\(\) \{/ {copy=1}
      /^u_cleanup\(\) \{/ {copy=0}
