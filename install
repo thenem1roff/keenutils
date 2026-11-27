@@ -1238,7 +1238,10 @@ u_show_status() {
         hydra)
             say 'Полный hr-uninstall.sh может затронуть Xray, AdGuardHome и другие пакеты.'
             say 'KeenUtils намеренно НЕ выполняет эту опасную очистку.' ;;
-        awg) say 'VPN-ключи и конфигурации удаляются только отдельным пунктом 2.' ;;
+        awg)
+            say 'Штатное удаление AWG Manager может удалить управляемые туннели и их настройки.'
+            say 'Перед удалением экспортируйте резервную копию в интерфейсе AWG Manager.'
+            if pkg_installed awgmautolist; then say 'Установлен зависимый пакет awgmautolist (Автолист).'; fi ;;
         torrserver)
             say 'Кеш на неизвестных дисках автоматически не удаляется.' ;;
     esac
@@ -1332,7 +1335,13 @@ u_remove() {
             say 'Стандартное удаление hrweb/hrneo через opkg.'
             say 'Опасный полный hr-uninstall.sh запускаться НЕ будет.'
             ;;
-        awg) say 'Конфигурация и VPN-ключи останутся до отдельной очистки.' ;;
+        awg)
+            say 'ВНИМАНИЕ: штатный prerm AWG Manager удаляет управляемые туннели, а также снимки обновлений.'
+            say 'Перед удалением экспортируйте резервную копию настроек и ключей через веб-интерфейс.'
+            if pkg_installed awgmautolist; then
+                say 'Автолист (awgmautolist) зависит от AWG Manager и должен быть удалён первым.'
+                ask_yes 'Удалить также зависимый пакет awgmautolist?' no || return 0
+            fi ;;
         torrserver)
             if u_watchdog_present; then
                 say 'Для удаления TorrServer сначала необходимо отключить его watchdog.'
@@ -1359,7 +1368,18 @@ u_remove() {
                 rm -f /opt/bin/neo || return 1
             fi
             ;;
-        awg) opkg remove awg-manager || return 1 ;;
+        awg)
+            # Upstream now ships awgmautolist as a separate dependent package.
+            # Remove only this named dependent with consent; never force-remove
+            # arbitrary dependents or shared routing runtimes.
+            if pkg_installed awgmautolist; then
+                opkg remove awgmautolist || return 1
+                if pkg_installed awgmautolist; then
+                    err 'Удаление awgmautolist не подтверждено. AWG Manager сохранён.'
+                    return 1
+                fi
+            fi
+            opkg remove awg-manager || return 1 ;;
         torr-watchdog) u_disable_watchdog || return 1 ;;
         torrserver)
             if u_watchdog_present; then u_disable_watchdog || return 1; fi
